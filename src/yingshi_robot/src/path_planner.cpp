@@ -216,6 +216,52 @@ void greedyCellOrder(
     // 单 cell 无需排序
     if (n_cells <= 1) return;
 
+    // ── 有孔洞时：圆形绕洞排序作为遍历序基础 ──
+    // 贪心纯端点距离在孔洞场景下可能产生跨洞连接，
+    // 圆形排序天然形成绕洞环，贪心在此基础上决定反转方向。
+    std::vector<size_t> traversal_order;
+    if (!hole_rings.empty()) {
+        // 计算孔洞中心
+        double h_cx = 0, h_cy = 0;
+        size_t h_n = 0;
+        for (const auto& hr : hole_rings) {
+            for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
+                h_cx += hr.getGeometry(vi).getX();
+                h_cy += hr.getGeometry(vi).getY();
+                ++h_n;
+            }
+        }
+        if (h_n > 0) { h_cx /= h_n; h_cy /= h_n; }
+
+        // 计算每个 cell 质心绕孔洞中心的极角
+        std::vector<std::pair<double, size_t>> cell_angles;
+        for (size_t ci = 0; ci < n_cells; ++ci) {
+            double sx = 0, sy = 0;
+            const auto& cell = swaths_by_cells[ci];
+            size_t sn = 0;
+            for (size_t j = 0; j < cell.size(); ++j) {
+                sx += (cell.at(j).startPoint().getX() + cell.at(j).endPoint().getX()) * 0.5;
+                sy += (cell.at(j).startPoint().getY() + cell.at(j).endPoint().getY()) * 0.5;
+                ++sn;
+            }
+            double ang = (sn > 0) ? std::atan2(sy/sn - h_cy, sx/sn - h_cx) : 0.0;
+            cell_angles.push_back({ang, ci});
+        }
+        std::sort(cell_angles.begin(), cell_angles.end());
+
+        // 找到 C0 在排序后的位置，从 C0 开始
+        size_t c0_pos = 0;
+        for (size_t i = 0; i < cell_angles.size(); ++i) {
+            if (cell_angles[i].second == 0) { c0_pos = i; break; }
+        }
+        for (size_t i = 0; i < n_cells; ++i) {
+            traversal_order.push_back(cell_angles[(c0_pos + i) % n_cells].second);
+        }
+    } else {
+        // 无孔洞：用恒等序（后续贪心会动态选择）
+        for (size_t i = 0; i < n_cells; ++i) traversal_order.push_back(i);
+    }
+
     std::vector<bool> visited(n_cells, false);
     f2c::types::SwathsByCells result;
     std::vector<size_t> new_order;
@@ -234,70 +280,49 @@ void greedyCellOrder(
         cur_y = last_sw.endPoint().getY();
     }
 
-    // 贪心主循环
+    // 主循环：有孔洞时按圆形序遍历，反转按贪心；无孔洞时纯贪心
+    size_t order_idx = 1;  // C0 已访问，从 traversal_order[1] 开始
     while (new_order.size() < n_cells) {
-        double best_dist = std::numeric_limits<double>::max();
-        size_t best_ci = 0;
+        size_t best_ci;
         bool best_reverse = false;
 
-        for (size_t ci = 0; ci < n_cells; ++ci) {
-            if (visited[ci]) continue;
-            const auto& cell = swaths_by_cells[ci];
-            if (cell.size() == 0) continue;
-
-            const auto& first_sw = cell.at(0);
-            const auto& last_sw = cell.at(cell.size() - 1);
-
-            double fsx = first_sw.startPoint().getX();
-            double fsy = first_sw.startPoint().getY();
-            double lex = last_sw.endPoint().getX();
-            double ley = last_sw.endPoint().getY();
-
-            // 候选1: 正常方向 — cur → cell.first.start
-            double dist_normal = std::hypot(cur_x - fsx, cur_y - fsy);
-            if (!hole_rings.empty() &&
-                yingshi::segmentCrossesHole(cur_x, cur_y, fsx, fsy, hole_rings, 20)) {
-                dist_normal += 1000.0;  // 穿洞惩罚
+        if (!hole_rings.empty()) {
+            // 有孔洞：按圆形绕洞序选择下一个 cell
+            best_ci = traversal_order[order_idx++];
+            // 贪心决定反转方向
+            const auto& cell = swaths_by_cells[best_ci];
+            if (cell.size() > 0) {
+                const auto& first_sw = cell.at(0);
+                const auto& last_sw = cell.at(cell.size() - 1);
+                double fsx = first_sw.startPoint().getX(), fsy = first_sw.startPoint().getY();
+                double lex = last_sw.endPoint().getX(), ley = last_sw.endPoint().getY();
+                double dist_normal = std::hypot(cur_x - fsx, cur_y - fsy);
+                double dist_rev = std::hypot(cur_x - lex, cur_y - ley);
+                if (yingshi::segmentCrossesHole(cur_x, cur_y, fsx, fsy, hole_rings, 20))
+                    dist_normal += 1000.0;
+                if (yingshi::segmentCrossesHole(cur_x, cur_y, lex, ley, hole_rings, 20))
+                    dist_rev += 1000.0;
+                best_reverse = (dist_rev < dist_normal);
             }
-
-            // 候选2: 反转方向 — cur → cell.last.end
-            double dist_rev = std::hypot(cur_x - lex, cur_y - ley);
-            if (!hole_rings.empty() &&
-                yingshi::segmentCrossesHole(cur_x, cur_y, lex, ley, hole_rings, 20)) {
-                dist_rev += 1000.0;
+        } else {
+            // 无孔洞：纯贪心选择最近未访问 cell
+            double best_dist = std::numeric_limits<double>::max();
+            best_ci = 0;
+            for (size_t ci = 0; ci < n_cells; ++ci) {
+                if (visited[ci]) continue;
+                const auto& cell = swaths_by_cells[ci];
+                if (cell.size() == 0) continue;
+                const auto& first_sw = cell.at(0);
+                const auto& last_sw = cell.at(cell.size() - 1);
+                double fsx = first_sw.startPoint().getX(), fsy = first_sw.startPoint().getY();
+                double lex = last_sw.endPoint().getX(), ley = last_sw.endPoint().getY();
+                double dist_normal = std::hypot(cur_x - fsx, cur_y - fsy);
+                double dist_rev = std::hypot(cur_x - lex, cur_y - ley);
+                if (dist_normal < best_dist) { best_dist = dist_normal; best_ci = ci; best_reverse = false; }
+                if (dist_rev < best_dist) { best_dist = dist_rev; best_ci = ci; best_reverse = true; }
             }
-
-            // ── 前瞻：选 exit 离剩余 cell 近的方向，避免"走进死胡同" ──
-            // 计算从本 cell 两种出口到剩余未访问 cell 的平均距离
-            {
-                double la_sum = 0, la_sum_rev = 0;
-                size_t la_n = 0;
-                for (size_t cj = 0; cj < n_cells; ++cj) {
-                    if (visited[cj] || cj == ci) continue;
-                    const auto& other = swaths_by_cells[cj];
-                    if (other.size() == 0) continue;
-                    const auto& ofs = other.at(0);
-                    const auto& ols = other.at(other.size() - 1);
-                    // 正常方向出口 = lex,ley → 到剩余 cell 最近入口的距离
-                    double d1 = std::hypot(lex - ofs.startPoint().getX(),
-                                           ley - ofs.startPoint().getY());
-                    double d2 = std::hypot(lex - ols.endPoint().getX(),
-                                           ley - ols.endPoint().getY());
-                    la_sum += std::min(d1, d2);
-                    // 反转方向出口 = fsx,fsy
-                    double d3 = std::hypot(fsx - ofs.startPoint().getX(),
-                                           fsy - ofs.startPoint().getY());
-                    double d4 = std::hypot(fsx - ols.endPoint().getX(),
-                                           fsy - ols.endPoint().getY());
-                    la_sum_rev += std::min(d3, d4);
-                    ++la_n;
-                }
-                if (la_n > 0) {
-                    const double LA_WEIGHT = 0.12;  // 前瞻权重：12%
-                    dist_normal += (la_sum / la_n) * LA_WEIGHT;
-                    dist_rev    += (la_sum_rev / la_n) * LA_WEIGHT;
-                }
-            }
+            if (best_dist >= std::numeric_limits<double>::max() * 0.5) break;
+        }
 
             if (dist_normal < best_dist) {
                 best_dist = dist_normal;
