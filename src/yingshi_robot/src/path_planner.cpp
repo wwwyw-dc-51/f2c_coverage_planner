@@ -267,6 +267,38 @@ void greedyCellOrder(
                 dist_rev += 1000.0;
             }
 
+            // ── 前瞻：选 exit 离剩余 cell 近的方向，避免"走进死胡同" ──
+            // 计算从本 cell 两种出口到剩余未访问 cell 的平均距离
+            {
+                double la_sum = 0, la_sum_rev = 0;
+                size_t la_n = 0;
+                for (size_t cj = 0; cj < n_cells; ++cj) {
+                    if (visited[cj] || cj == ci) continue;
+                    const auto& other = swaths_by_cells[cj];
+                    if (other.size() == 0) continue;
+                    const auto& ofs = other.at(0);
+                    const auto& ols = other.at(other.size() - 1);
+                    // 正常方向出口 = lex,ley → 到剩余 cell 最近入口的距离
+                    double d1 = std::hypot(lex - ofs.startPoint().getX(),
+                                           ley - ofs.startPoint().getY());
+                    double d2 = std::hypot(lex - ols.endPoint().getX(),
+                                           ley - ols.endPoint().getY());
+                    la_sum += std::min(d1, d2);
+                    // 反转方向出口 = fsx,fsy
+                    double d3 = std::hypot(fsx - ofs.startPoint().getX(),
+                                           fsy - ofs.startPoint().getY());
+                    double d4 = std::hypot(fsx - ols.endPoint().getX(),
+                                           fsy - ols.endPoint().getY());
+                    la_sum_rev += std::min(d3, d4);
+                    ++la_n;
+                }
+                if (la_n > 0) {
+                    const double LA_WEIGHT = 0.12;  // 前瞻权重：12%
+                    dist_normal += (la_sum / la_n) * LA_WEIGHT;
+                    dist_rev    += (la_sum_rev / la_n) * LA_WEIGHT;
+                }
+            }
+
             if (dist_normal < best_dist) {
                 best_dist = dist_normal;
                 best_ci = ci;
