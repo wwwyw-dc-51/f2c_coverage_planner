@@ -100,22 +100,6 @@ void fillBoundaryGaps(
         if (cy > c_max_y) c_max_y = cy;
     }
 
-    // ── 判断 cell 是否贴近多边形外环 ──
-    bool touches_outer = false;
-    {
-        double min_d = std::numeric_limits<double>::max();
-        for (size_t ci = 0; ci + 1 < cell_ring.size(); ++ci) {
-            double cx = cell_ring.getGeometry(ci).getX();
-            double cy = cell_ring.getGeometry(ci).getY();
-            for (size_t pi = 0; pi + 1 < poly_ring.size(); ++pi) {
-                double d = std::hypot(cx - poly_ring.getGeometry(pi).getX(),
-                                      cy - poly_ring.getGeometry(pi).getY());
-                if (d < min_d) min_d = d;
-            }
-        }
-        touches_outer = (min_d < cov_width * 1.5);
-    }
-
     // ── swath 方向向量（外环+孔洞共用）──
     double s_dx = std::cos(swath_angle);
     double s_dy = std::sin(swath_angle);
@@ -149,7 +133,9 @@ void fillBoundaryGaps(
     // ═══════════════════════════════════════════════════
     // 外环边界补刀
     // ═══════════════════════════════════════════════════
-    if (touches_outer)
+    // 移除 touches_outer 整体门控，改为逐边独立判断。
+    // 原因：cell 经 GDAL 操作后顶点可能与 polygon 顶点略有偏差，
+    // vertex-to-vertex 距离门控会误杀实际贴边的 cell。
     {
         for (size_t pi = 0; pi + 1 < poly_ring.size(); ++pi)
         {

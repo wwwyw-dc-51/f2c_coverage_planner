@@ -1950,9 +1950,10 @@ private:
                                 if (crosses_hole) {
                                     // ── Phase 2D: 斜边感知 — 区分真孔洞 vs 斜边界 ──
                                     // 两 cell 质心连线穿过孔洞边，但若 cell 边界实际贴近
-                                    // （距离 < cov_width），说明是斜边或 grazing 误判而非真分隔，
+                                    // （距离 < cov_width * 0.25），说明是斜边或共享边界误判，
                                     // 应允许合并（避免 sweep 分解的斜边末端三角 cell 被孤立）。
-                                    // 重新计算 cell 间最短边界距离（原 min_d 在其他作用域不可用）
+                                    // 孔洞顶点双向切割产生的小 cell 用更严阈值（0.25 vs 0.50），
+                                    // 防止 X 向切割被吞并回全宽条带。
                                     double touch_dist = std::numeric_limits<double>::max();
                                     for (size_t pi2 = 0; pi2 + 1 < ring_i_cent.size(); ++pi2) {
                                         double ix = ring_i_cent.getGeometry(pi2).getX();
@@ -1964,13 +1965,12 @@ private:
                                             if (d < touch_dist) touch_dist = d;
                                         }
                                     }
-                                    if (touch_dist < coverage_width_ * 0.5) {
-                                        // 物理贴近 → 斜边/共享边界，不是真孔洞分隔
+                                    if (touch_dist < coverage_width_ * 0.25) {
+                                        // 物理贴近（共享边界）→ 不是真孔洞分隔，允许合并
                                         RCLCPP_DEBUG(this->get_logger(),
                                             "  Cells %zu+%zu: centroid line crosses hole but "
                                             "cells touch (%.2f m < %.2f m) — allowing merge",
-                                            i, j, touch_dist, coverage_width_ * 0.5);
-                                        // 不跳过，允许合并
+                                            i, j, touch_dist, coverage_width_ * 0.25);
                                     } else {
                                         continue;  // 真孔洞分隔，不合并
                                     }
@@ -2095,8 +2095,14 @@ private:
                         f2c::types::Swaths cs = filterShortSwaths(cell_swaths,
                             min_swath_length_, rm);
                         // 边界间隙填补：filterShortSwaths 之后补，避免填缝被 min_swath_length 误杀
+                        size_t sz_before = cs.size();
                         fillBoundaryGaps(cs, no_hl.getGeometry(ci), cell, best_ang,
                             r_w, swath_endpoint_shrink_distance_);
+                        if (cs.size() > sz_before) {
+                            RCLCPP_INFO(this->get_logger(),
+                                "  Boundary fill: cell[%zu] +%zu swaths (%zu→%zu)",
+                                ci, cs.size() - sz_before, sz_before, cs.size());
+                        }
                         if (cs.size() > 0) swaths_by_cells.push_back(cs);
                     }
                 } else {
@@ -2127,7 +2133,13 @@ private:
                         }
                         size_t rm = 0;
                         cs = filterShortSwaths(cs, min_swath_length_, rm);
+                        size_t sz_before = cs.size();
                         fillBoundaryGaps(cs, sub, cell, ang, r_w, swath_endpoint_shrink_distance_);
+                        if (cs.size() > sz_before) {
+                            RCLCPP_INFO(this->get_logger(),
+                                "  Boundary fill: cell[%zu] +%zu swaths (%zu→%zu)",
+                                ci, cs.size() - sz_before, sz_before, cs.size());
+                        }
                         if (cs.size() > 0) swaths_by_cells.push_back(cs);
                     }
                 }
