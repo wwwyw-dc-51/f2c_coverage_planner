@@ -287,7 +287,7 @@ void greedyCellOrder(
         bool best_reverse = false;
 
         if (!hole_rings.empty()) {
-            // 有孔洞：按圆形绕洞序选择下一个 cell
+            // 有孔洞：按圆形绕洞序选择下一个 cell（贪心仅决定反转）
             best_ci = traversal_order[order_idx++];
             // 贪心决定反转方向
             const auto& cell = swaths_by_cells[best_ci];
@@ -323,21 +323,6 @@ void greedyCellOrder(
             }
             if (best_dist >= std::numeric_limits<double>::max() * 0.5) break;
         }
-
-            if (dist_normal < best_dist) {
-                best_dist = dist_normal;
-                best_ci = ci;
-                best_reverse = false;
-            }
-            if (dist_rev < best_dist) {
-                best_dist = dist_rev;
-                best_ci = ci;
-                best_reverse = true;
-            }
-        }
-
-        // 无有效候选（所有剩余 cell 均为空）→ 提前退出
-        if (best_dist >= std::numeric_limits<double>::max() * 0.5) break;
 
         // 选中 best_ci，标记已访问
         visited[best_ci] = true;
