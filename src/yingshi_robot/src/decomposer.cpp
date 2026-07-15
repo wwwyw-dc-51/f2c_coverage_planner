@@ -77,14 +77,8 @@ f2c::types::Cells rectilinearDecompose(
         return fallback;
     }
 
-    // sweep模式: 强制x为全宽范围
-    if (params.use_sweep) {
-        double xmin = *std::min_element(xs.begin(), xs.end());
-        double xmax = *std::max_element(xs.begin(), xs.end());
-        xs.clear();
-        xs.push_back(xmin);
-        xs.push_back(xmax);
-    }
+    // 双向切割：保留所有顶点 X/Y 坐标作为切割线
+    // 不再压缩 X 为全宽 → 孔洞附近生成垂直切割线，cell 更矩形
 
     if (xs.size() < 2) {
         f2c::types::Cells fallback;
