@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+install/
+log/
+
+# Test results & backups
+test_results/
+backups/
+releases/
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Large third-party
+src/Fields2Cover/
+
+# Temp files
+*.bak
+*.tmp

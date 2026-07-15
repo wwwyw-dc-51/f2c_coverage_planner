@@ -1,0 +1,22 @@
+# 25m-scale L-shaped cleaning area, plus one internal 10m x 10m hole.
+#
+# Coordinate frame:
+# - Overall bounding box is [0,0] to [25,25].
+# - Left leg is x=[0,6], y=[0,25].
+# - Top/right band is x=[6,25], y=[12,25].
+# - Internal hole is x=[9,19], y=[13.5,23.5].
+polygon:
+  - [0.0, 0.0]
+  - [6.0, 0.0]
+  - [6.0, 12.0]
+  - [25.0, 12.0]
+  - [25.0, 25.0]
+  - [0.0, 25.0]
+
+holes:
+  - - [9.0, 13.5]
+    - [19.0, 13.5]
+    - [19.0, 23.5]
+    - [9.0, 23.5]
+
+boundary_type: closed

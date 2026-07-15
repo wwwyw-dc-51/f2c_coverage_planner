@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>F2C 全覆盖路径规划 — 算法进展可视化</title>
+<style>
+:root {
+  --surface-1: #fcfcfb;
+  --surface-page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --gridline: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+
+  --series-1: #2a78d6;  /* blue */
+  --series-2: #1baf7a;  /* aqua */
+  --series-3: #eda100;  /* yellow */
+  --series-4: #008300;  /* green */
+  --series-5: #4a3aa7;  /* violet */
+  --series-6: #e34948;  /* red */
+  --deemph: #c3c2b7;
+
+  --seq-100: #cde2fb; --seq-200: #9ec5f4; --seq-300: #6da7ec;
+  --seq-400: #3987e5; --seq-500: #256abf; --seq-600: #184f95; --seq-700: #0d366b;
+
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-1: #1a1a19;
+    --surface-page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+
+    --series-1: #3987e5; --series-2: #199e70; --series-3: #c98500;
+    --series-4: #008300; --series-5: #9085e9; --series-6: #e66767;
+
+    --seq-100: #2a3d5c; --seq-200: #3a5480; --seq-300: #4d6ea3;
+    --seq-400: #3987e5; --seq-500: #5da0f0; --seq-600: #7db8f5; --seq-700: #a8d0fa;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  padding: 40px 24px;
+}
+
+.container { max-width: 1100px; margin: 0 auto; }
+
+h1 {
+  font-size: 28px; font-weight: 700; margin-bottom: 4px;
+  color: var(--text-primary);
+}
+.subtitle {
+  font-size: 14px; color: var(--text-secondary); margin-bottom: 40px;
+}
+
+.chart-section {
+  background: var(--surface-1);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 28px 24px 20px;
+  margin-bottom: 24px;
+}
+
+.chart-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 16px;
+}
+.chart-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.chart-note  { font-size: 12px; color: var(--text-muted); }
+
+.chart-body { position: relative; width: 100%; }
+
+svg { display: block; width: 100%; }
+svg text { font-family: inherit; }
+
+/* Axis */
+.axis-line { stroke: var(--baseline); stroke-width: 1; }
+.grid-line { stroke: var(--gridline); stroke-width: 1; }
+.tick-text { font-size: 12px; fill: var(--text-muted); }
+.axis-label { font-size: 12px; fill: var(--text-secondary); }
+
+/* Bars */
+.bar { transition: opacity 0.15s; }
+.bar:hover { opacity: 0.85; }
+
+/* Legend */
+.legend-row { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.legend-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+
+/* Tooltip */
+.tooltip {
+  position: absolute; pointer-events: none;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 12px; font-size: 13px;
+  color: var(--text-primary); box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  opacity: 0; transition: opacity 0.1s; z-index: 10;
+  white-space: nowrap;
+}
+.tooltip.active { opacity: 1; }
+
+/* Heatmap */
+.heatmap-cell { transition: opacity 0.15s; }
+.heatmap-cell:hover { opacity: 0.85; stroke: var(--text-primary); stroke-width: 1.5; }
+
+/* KPI row */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.kpi-card {
+  background: var(--surface-1); border-radius: 12px; border: 1px solid var(--border);
+  padding: 20px; text-align: center;
+}
+.kpi-value { font-size: 32px; font-weight: 700; color: var(--text-primary); }
+.kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.kpi-delta { font-size: 13px; margin-top: 2px; }
+.kpi-delta.up { color: var(--good); }
+.kpi-delta.down { color: var(--critical); }
+
+/* Emphasis bar highlight */
+.bar-emphasis { filter: none; }
+.bar-deemph { opacity: 0.3; }
+
+/* Comparison card */
+.cmp-label { font-size: 13px; font-weight: 600; fill: var(--text-primary); }
+.cmp-value { font-size: 20px; font-weight: 700; }
+.cmp-sub   { font-size: 11px; fill: var(--text-muted); }
+
+@media (max-width: 768px) {
+  body { padding: 20px 12px; }
+  .chart-section { padding: 20px 12px 16px; }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>F2C 全覆盖路径规划</h1>
+<p class="subtitle">算法进展可视化报告 · 2026-07-14 · v0 (1667行) → v3 (3948行)</p>
+
+<!-- KPI 概览行 -->
+<div class="kpi-row">
+  <div class="kpi-card">
+    <div class="kpi-value">2.37×</div>
+    <div class="kpi-label">代码规模增长</div>
+    <div class="kpi-delta up">1667 → 3948 行</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-value">6.0×</div>
+    <div class="kpi-label">Cell 数量缩减 (S3)</div>
+    <div class="kpi-delta up">42 → 7 cells</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-value">+15.6pp</div>
+    <div class="kpi-label">S4 窄走廊覆盖率跃升</div>
+    <div class="kpi-delta up">81.4% → 97.0%</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-value">0</div>
+    <div class="kpi-label">Snake 模式穿洞次数</div>
+    <div class="kpi-delta up">v2: 3~66 次 → 确定性零穿越</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-value">10</div>
+    <div class="kpi-label">新增算法特性</div>
+    <div class="kpi-delta up">v0 原生 F2C → v3 全栈优化</div>
+  </div>
+</div>
+
+<!-- Chart 1: 代码规模增长 -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">代码规模增长</span>
+    <span class="chart-note">polygon_planner_node.cpp 行数演变</span>
+  </div>
+  <div class="chart-body" id="chart-code-growth"></div>
+</div>
+
+<!-- Chart 2: 覆盖率对比 -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">6 场景覆盖率对比</span>
+    <span class="chart-note">v1 (07-11 基准) vs v2 (sweep) — v3 数据运行中</span>
+  </div>
+  <div class="legend-row" id="legend-coverage"></div>
+  <div class="chart-body" id="chart-coverage"></div>
+</div>
+
+<!-- Chart 3: 功能特性矩阵 -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">功能特性矩阵</span>
+    <span class="chart-note">10 项核心特性 × 4 个版本 · ■ 已实现 □ 未实现</span>
+  </div>
+  <div class="chart-body" id="chart-features"></div>
+</div>
+
+<!-- Chart 4: S4 窄走廊突破 -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">S4 窄走廊 — 关键突破</span>
+    <span class="chart-note">2m×20m 走廊 · 覆盖率从灾难级修复至可用</span>
+  </div>
+  <div class="chart-body" id="chart-s4-breakthrough"></div>
+</div>
+
+<!-- Chart 5: S3 Cell 数量对比 -->
+<div class="chart-section">
+  <div class="chart-header">
+    <span class="chart-title">S3 分解效率对比</span>
+    <span class="chart-note">25m×25m + 不规则六边形障碍 · Sweep 分解从根本上减少 cell 数</span>
+  </div>
+  <div class="chart-body" id="chart-s3-cells"></div>
+</div>
+
+<p style="text-align:center;font-size:12px;color:var(--text-muted);margin-top:32px;">
+  F2C Coverage Path Planning — Algorithm Progress Report · 2026-07-14
+</p>
+
+</div>
+
+<script>
+// ========== Shared helpers ==========
+const M = { top: 8, right: 20, bottom: 48, left: 52 };
+
+function makeChart(id, width, height) {
+  const el = document.getElementById(id);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.style.maxWidth = width + 'px';
+  el.innerHTML = '';
+  el.appendChild(svg);
+  return { svg, W: width, H: height,
+    innerW: width - M.left - M.right,
+    innerH: height - M.top - M.bottom };
+}
+
+function addAxis(svg, ctx, yMax, yLabel) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const nTicks = 5;
+  const step = Math.ceil(yMax / nTicks / 10) * 10 || 1;
+  const ticks = [];
+  for (let v = 0; v <= yMax + step; v += step) ticks.push(v);
+
+  // Y gridlines
+  ticks.forEach(v => {
+    const y = M.top + ctx.innerH - (v / yMax) * ctx.innerH;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', M.left); line.setAttribute('x2', ctx.W - M.right);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('class', 'grid-line');
+    svg.appendChild(line);
+
+    const text = document.createElementNS(NS, 'text');
+    text.setAttribute('x', M.left - 8); text.setAttribute('y', y + 4);
+    text.setAttribute('text-anchor', 'end'); text.setAttribute('class', 'tick-text');
+    text.textContent = v;
+    svg.appendChild(text);
+  });
+
+  // Baseline
+  const bl = document.createElementNS(NS, 'line');
+  bl.setAttribute('x1', M.left); bl.setAttribute('x2', ctx.W - M.right);
+  bl.setAttribute('y1', M.top + ctx.innerH); bl.setAttribute('y2', M.top + ctx.innerH);
+  bl.setAttribute('class', 'axis-line');
+  svg.appendChild(bl);
+
+  // Y label
+  if (yLabel) {
+    const yl = document.createElementNS(NS, 'text');
+    yl.setAttribute('x', 14); yl.setAttribute('y', M.top + ctx.innerH / 2);
+    yl.setAttribute('text-anchor', 'middle');
+    yl.setAttribute('transform', `rotate(-90, 14, ${M.top + ctx.innerH/2})`);
+    yl.setAttribute('class', 'axis-label'); yl.textContent = yLabel;
+    svg.appendChild(yl);
+  }
+}
+
+function addTooltip(el) {
+  const tip = document.createElement('div');
+  tip.className = 'tooltip';
+  el.style.position = 'relative';
+  el.appendChild(tip);
+  return tip;
+}
+
+// ========== Chart 1: 代码规模增长 ==========
+(function() {
+  const { svg, W, H, innerW, innerH } = makeChart('chart-code-growth', 700, 340);
+  const NS = 'http://www.w3.org/2000/svg';
+  const data = [
+    { label: 'v0 原初版', sub: '07-07', lines: 1667 },
+    { label: 'v1 基础优化', sub: '07-09~11', lines: 2795 },
+    { label: 'v2 per-cell', sub: '07-11~12', lines: 3491 },
+    { label: 'v3 当前', sub: '07-13~14', lines: 3948 },
+  ];
+
+  const yMax = 4500;
+  addAxis(svg, {W,H,innerW,innerH}, yMax, '代码行数');
+
+  const barW = Math.min(80, innerW / data.length * 0.55);
+  const groupW = innerW / data.length;
+  const pad = (groupW - barW) / 2;
+
+  data.forEach((d, i) => {
+    const x = M.left + i * groupW + pad;
+    const barH = (d.lines / yMax) * innerH;
+    const y = M.top + innerH - barH;
+
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', barW); rect.setAttribute('height', barH);
+    rect.setAttribute('rx', '4'); rect.setAttribute('ry', '4');
+    rect.setAttribute('fill', 'var(--series-1)');
+    rect.setAttribute('class', 'bar');
+    rect.innerHTML = `<title>${d.label} (${d.sub}): ${d.lines.toLocaleString()} 行</title>`;
+    svg.appendChild(rect);
+
+    // Value label
+    const vt = document.createElementNS(NS, 'text');
+    vt.setAttribute('x', x + barW / 2); vt.setAttribute('y', y - 8);
+    vt.setAttribute('text-anchor', 'middle');
+    vt.setAttribute('class', 'tick-text');
+    vt.style.fontWeight = '600';
+    vt.textContent = d.lines.toLocaleString();
+    svg.appendChild(vt);
+
+    // X label
+    const lt = document.createElementNS(NS, 'text');
+    lt.setAttribute('x', x + barW / 2); lt.setAttribute('y', M.top + innerH + 18);
+    lt.setAttribute('text-anchor', 'middle'); lt.setAttribute('class', 'tick-text');
+    lt.textContent = d.label; svg.appendChild(lt);
+
+    const st = document.createElementNS(NS, 'text');
+    st.setAttribute('x', x + barW / 2); st.setAttribute('y', M.top + innerH + 34);
+    st.setAttribute('text-anchor', 'middle'); st.setAttribute('class', 'tick-text');
+    st.style.fontSize = '10px'; st.textContent = d.sub; svg.appendChild(st);
+
+    // Growth arrow between bars
+    if (i > 0) {
+      const prev = data[i-1];
+      const growth = d.lines - prev.lines;
+      const px = M.left + (i-1) * groupW + pad + barW;
+      const py = M.top + innerH - (prev.lines / yMax) * innerH;
+      const cx = M.left + i * groupW + pad;
+      const cy = M.top + innerH - (d.lines / yMax) * innerH;
+      const midX = (px + cx) / 2;
+      const midY = Math.min(py, cy) - 22;
+
+      const gtext = document.createElementNS(NS, 'text');
+      gtext.setAttribute('x', midX); gtext.setAttribute('y', midY);
+      gtext.setAttribute('text-anchor', 'middle');
+      gtext.setAttribute('fill', 'var(--good)'); gtext.style.fontSize = '12px';
+      gtext.style.fontWeight = '600';
+      gtext.textContent = '+' + growth.toLocaleString();
+      svg.appendChild(gtext);
+    }
+  });
+})();
+
+// ========== Chart 2: 6 场景覆盖率对比 ==========
+(function() {
+  const { svg, W, H, innerW, innerH } = makeChart('chart-coverage', 780, 380);
+  const NS = 'http://www.w3.org/2000/svg';
+  const scenarios = ['S1\n矩形', 'S2\nL形', 'S3\n异形障碍', 'S4\n窄走廊', 'S5\n两室', 'S6\n两室+柜子'];
+  const v1 = [100, 100, 98.1, 81.4, 100, 99.1];
+  const v2 = [98.60, 98.68, 97.91, 95.00, 99.04, 98.56];
+  // v3 pending
+  const colors = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)'];
+  const labels = ['v1 (07-11 基准)', 'v2 (sweep)', 'v3 (Phase 2-4)'];
+
+  // Legend
+  const leg = document.getElementById('legend-coverage');
+  leg.innerHTML = labels.map((l, i) =>
+    `<span class="legend-item"><span class="legend-swatch" style="background:${['var(--series-1)','var(--series-2)','var(--series-3)'][i]}"></span>${l}</span>`
+  ).join('') + '<span class="legend-item" style="opacity:0.6">⏳ v3 运行中</span>';
+
+  const yMin = 75, yMax = 100;
+  // Custom Y axis
+  [75, 80, 85, 90, 95, 100].forEach(v => {
+    const y = M.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', M.left); line.setAttribute('x2', W - M.right);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('class', 'grid-line'); svg.appendChild(line);
+
+    const text = document.createElementNS(NS, 'text');
+    text.setAttribute('x', M.left - 8); text.setAttribute('y', y + 4);
+    text.setAttribute('text-anchor', 'end'); text.setAttribute('class', 'tick-text');
+    text.textContent = v + '%'; svg.appendChild(text);
+  });
+
+  // 99.5% threshold line
+  const thY = M.top + innerH - ((99.5 - yMin) / (yMax - yMin)) * innerH;
+  const thLine = document.createElementNS(NS, 'line');
+  thLine.setAttribute('x1', M.left); thLine.setAttribute('x2', W - M.right);
+  thLine.setAttribute('y1', thY); thLine.setAttribute('y2', thY);
+  thLine.setAttribute('stroke', 'var(--critical)'); thLine.setAttribute('stroke-width', '1');
+  thLine.setAttribute('stroke-dasharray', '6,3'); thLine.setAttribute('opacity', '0.5');
+  svg.appendChild(thLine);
+  const thText = document.createElementNS(NS, 'text');
+  thText.setAttribute('x', W - M.right - 4); thText.setAttribute('y', thY - 4);
+  thText.setAttribute('text-anchor', 'end'); thText.setAttribute('fill', 'var(--critical)');
+  thText.style.fontSize = '10px'; thText.textContent = '合格线 99.5%';
+  svg.appendChild(thText);
+
+  const nBars = 2, groupW = innerW / scenarios.length;
+  const barW = Math.min(22, groupW * 0.25), totalW = nBars * barW + (nBars-1) * 2;
+  const pad = (groupW - totalW) / 2;
+
+  scenarios.forEach((s, si) => {
+    const gx = M.left + si * groupW;
+    const vals = [v1[si], v2[si]];
+
+    vals.forEach((val, vi) => {
+      const bx = gx + pad + vi * (barW + 2);
+      const bh = Math.max(2, ((val - yMin) / (yMax - yMin)) * innerH);
+      const by = M.top + innerH - bh;
+
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', bx); rect.setAttribute('y', by);
+      rect.setAttribute('width', barW); rect.setAttribute('height', bh);
+      rect.setAttribute('rx', '3'); rect.setAttribute('ry', '3');
+      rect.setAttribute('fill', colors[vi]);
+      rect.setAttribute('class', 'bar');
+      rect.innerHTML = `<title>${s.replace('\n',' ')} · ${labels[vi]}: ${val}%</title>`;
+      svg.appendChild(rect);
+    });
+
+    // X label
+    const lines = s.split('\n');
+    const lt1 = document.createElementNS(NS, 'text');
+    lt1.setAttribute('x', gx + groupW/2); lt1.setAttribute('y', M.top + innerH + 18);
+    lt1.setAttribute('text-anchor', 'middle'); lt1.setAttribute('class', 'tick-text');
+    lt1.textContent = lines[0]; svg.appendChild(lt1);
+    if (lines[1]) {
+      const lt2 = document.createElementNS(NS, 'text');
+      lt2.setAttribute('x', gx + groupW/2); lt2.setAttribute('y', M.top + innerH + 34);
+      lt2.setAttribute('text-anchor', 'middle'); lt2.setAttribute('class', 'tick-text');
+      lt2.style.fontSize = '10px'; lt2.textContent = lines[1]; svg.appendChild(lt2);
+    }
+  });
+
+  // Baseline
+  const bl = document.createElementNS(NS, 'line');
+  bl.setAttribute('x1', M.left); bl.setAttribute('x2', W - M.right);
+  bl.setAttribute('y1', M.top + innerH); bl.setAttribute('y2', M.top + innerH);
+  bl.setAttribute('class', 'axis-line'); svg.appendChild(bl);
+})();
+
+// ========== Chart 3: 功能特性矩阵 ==========
+(function() {
+  const features = [
+    'Boustrophedon 网格分解',
+    'Sweep 扫描线分解',
+    'fillBoundaryGaps 边界补刀',
+    '多角度 Swath 优化',
+    'RDP 路径简化',
+    '评估器',
+    'Snake 路径排序',
+    '斜边感知 Swath',
+    '倾斜 Sweep 自旋转',
+    'RemArea 间隙填补',
+  ];
+  const versions = ['v0', 'v1', 'v2', 'v3'];
+  // 0=no, 1=basic, 2=advanced
+  const matrix = [
+    [1, 1, 1, 1],  // Boustrophedon
+    [0, 0, 0, 1],  // Sweep
+    [0, 1, 1, 1],  // fillBoundaryGaps
+    [0, 1, 1, 1],  // multi-angle swath
+    [0, 0, 1, 1],  // RDP
+    [0, 1, 2, 2],  // evaluator (v1.0→v2.1)
+    [0, 0, 0, 1],  // Snake
+    [0, 0, 0, 1],  // slanted swath
+    [0, 0, 0, 1],  // tilted sweep
+    [0, 0, 0, 1],  // RemArea
+  ];
+
+  const { svg, W, H, innerW, innerH } = makeChart('chart-features', 740, 400);
+  const NS = 'http://www.w3.org/2000/svg';
+
+  const cellW = (innerW - 40) / versions.length;
+  const cellH = Math.min(32, (innerH - 20) / features.length);
+  const leftLabelW = 140;
+
+  // Version headers
+  versions.forEach((v, vi) => {
+    const x = M.left + leftLabelW + vi * cellW + cellW/2;
+    const text = document.createElementNS(NS, 'text');
+    text.setAttribute('x', x); text.setAttribute('y', M.top - 4);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('class', 'tick-text'); text.style.fontWeight = '600';
+    text.textContent = v; svg.appendChild(text);
+  });
+
+  // Feature rows
+  features.forEach((f, fi) => {
+    const y = M.top + fi * cellH;
+    // Label
+    const ft = document.createElementNS(NS, 'text');
+    ft.setAttribute('x', M.left + leftLabelW - 8); ft.setAttribute('y', y + cellH/2 + 5);
+    ft.setAttribute('text-anchor', 'end'); ft.setAttribute('class', 'tick-text');
+    ft.textContent = f; svg.appendChild(ft);
+
+    versions.forEach((v, vi) => {
+      const val = matrix[fi][vi];
+      const x = M.left + leftLabelW + vi * cellW;
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', x + 2); rect.setAttribute('y', y + 2);
+      rect.setAttribute('width', cellW - 4); rect.setAttribute('height', cellH - 4);
+      rect.setAttribute('rx', '3');
+
+      if (val === 0) {
+        rect.setAttribute('fill', 'var(--gridline)');
+        rect.setAttribute('opacity', '0.5');
+      } else if (val === 1) {
+        rect.setAttribute('fill', 'var(--seq-200)');
+      } else {
+        rect.setAttribute('fill', 'var(--seq-600)');
+      }
+      rect.setAttribute('class', 'heatmap-cell');
+      rect.innerHTML = `<title>${f} · ${v}: ${val === 0 ? '未实现' : val === 1 ? '已实现' : 'v2.1 增强版'}</title>`;
+      svg.appendChild(rect);
+
+      // icon
+      const icon = document.createElementNS(NS, 'text');
+      icon.setAttribute('x', x + cellW/2); icon.setAttribute('y', y + cellH/2 + 5);
+      icon.setAttribute('text-anchor', 'middle');
+      icon.style.fontSize = '14px';
+      icon.setAttribute('fill', val === 0 ? 'var(--text-muted)' : 'var(--surface-1)');
+      icon.textContent = val === 0 ? '—' : '✓';
+      svg.appendChild(icon);
+    });
+  });
+
+  // Legend below
+})();
+
+// ========== Chart 4: S4 窄走廊突破 ==========
+(function() {
+  const { svg, W, H, innerW, innerH } = makeChart('chart-s4-breakthrough', 600, 300);
+  const NS = 'http://www.w3.org/2000/svg';
+
+  const data = [
+    { label: 'v1\n07-11', val: 81.4, color: 'var(--critical)', deemph: false },
+    { label: 'v2\nsweep', val: 95.0, color: 'var(--series-1)', deemph: false },
+    { label: 'v3\nPhase 2-4', val: null, color: 'var(--series-2)', deemph: false },
+  ];
+
+  const yMin = 70, yMax = 100;
+  [70, 75, 80, 85, 90, 95, 100].forEach(v => {
+    const y = M.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', M.left); line.setAttribute('x2', W - M.right);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('class', 'grid-line'); svg.appendChild(line);
+
+    const text = document.createElementNS(NS, 'text');
+    text.setAttribute('x', M.left - 8); text.setAttribute('y', y + 4);
+    text.setAttribute('text-anchor', 'end'); text.setAttribute('class', 'tick-text');
+    text.textContent = v + '%'; svg.appendChild(text);
+  });
+
+  const groupW = innerW / data.length, barW = Math.min(80, groupW * 0.5);
+  const pad = (groupW - barW) / 2;
+
+  data.forEach((d, i) => {
+    const x = M.left + i * groupW + pad;
+    if (d.val === null) {
+      // Pending placeholder
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', x); rect.setAttribute('y', M.top + innerH - 30);
+      rect.setAttribute('width', barW); rect.setAttribute('height', 30);
+      rect.setAttribute('rx', '4'); rect.setAttribute('fill', 'none');
+      rect.setAttribute('stroke', 'var(--series-2)'); rect.setAttribute('stroke-width', '2');
+      rect.setAttribute('stroke-dasharray', '4,3');
+      svg.appendChild(rect);
+      const wt = document.createElementNS(NS, 'text');
+      wt.setAttribute('x', x + barW/2); wt.setAttribute('y', M.top + innerH - 10);
+      wt.setAttribute('text-anchor', 'middle'); wt.style.fontSize = '12px';
+      wt.setAttribute('fill', 'var(--text-muted)'); wt.textContent = '⏳';
+      svg.appendChild(wt);
+    } else {
+      const barH = ((d.val - yMin) / (yMax - yMin)) * innerH;
+      const y = M.top + innerH - barH;
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', x); rect.setAttribute('y', y);
+      rect.setAttribute('width', barW); rect.setAttribute('height', barH);
+      rect.setAttribute('rx', '4'); rect.setAttribute('fill', d.color);
+      rect.setAttribute('class', 'bar');
+      svg.appendChild(rect);
+
+      // Value
+      const vt = document.createElementNS(NS, 'text');
+      vt.setAttribute('x', x + barW/2); vt.setAttribute('y', y - 8);
+      vt.setAttribute('text-anchor', 'middle');
+      vt.setAttribute('fill', 'var(--text-primary)'); vt.style.fontWeight = '700';
+      vt.style.fontSize = '16px'; vt.textContent = d.val + '%';
+      svg.appendChild(vt);
+
+      // Arrow for growth
+      if (i === 1) {
+        const diff = 95.0 - 81.4;
+        const ax = M.left + (i-0.5) * groupW;
+        const ay = M.top + innerH - ((95.0 - yMin)/(yMax-yMin)) * innerH - 35;
+        const at = document.createElementNS(NS, 'text');
+        at.setAttribute('x', ax); at.setAttribute('y', ay);
+        at.setAttribute('text-anchor', 'middle');
+        at.setAttribute('fill', 'var(--good)'); at.style.fontWeight = '700';
+        at.style.fontSize = '14px';
+        at.textContent = '↑ +' + diff.toFixed(1) + 'pp';
+        svg.appendChild(at);
+      }
+    }
+
+    // X label
+    const lines = d.label.split('\n');
+    const lt1 = document.createElementNS(NS, 'text');
+    lt1.setAttribute('x', x + barW/2); lt1.setAttribute('y', M.top + innerH + 18);
+    lt1.setAttribute('text-anchor', 'middle'); lt1.setAttribute('class', 'tick-text');
+    lt1.textContent = lines[0]; svg.appendChild(lt1);
+    if (lines[1]) {
+      const lt2 = document.createElementNS(NS, 'text');
+      lt2.setAttribute('x', x + barW/2); lt2.setAttribute('y', M.top + innerH + 34);
+      lt2.setAttribute('text-anchor', 'middle'); lt2.setAttribute('class', 'tick-text');
+      lt2.style.fontSize = '10px'; lt2.textContent = lines[1]; svg.appendChild(lt2);
+    }
+  });
+
+  // Baseline
+  const bl = document.createElementNS(NS, 'line');
+  bl.setAttribute('x1', M.left); bl.setAttribute('x2', W - M.right);
+  bl.setAttribute('y1', M.top + innerH); bl.setAttribute('y2', M.top + innerH);
+  bl.setAttribute('class', 'axis-line'); svg.appendChild(bl);
+
+  // Annotation
+  const ann = document.createElementNS(NS, 'text');
+  ann.setAttribute('x', M.left + innerW/2); ann.setAttribute('y', M.top + 14);
+  ann.setAttribute('text-anchor', 'middle'); ann.setAttribute('fill', 'var(--text-secondary)');
+  ann.style.fontSize = '12px';
+  ann.textContent = 'fillBoundaryGaps 去重移除：S4 覆盖率从灾难级(81.4%)修复至可用(95.0%)';
+  svg.appendChild(ann);
+})();
+
+// ========== Chart 5: S3 Cell 数量对比 ==========
+(function() {
+  const { svg, W, H, innerW, innerH } = makeChart('chart-s3-cells', 520, 300);
+  const NS = 'http://www.w3.org/2000/svg';
+
+  const data = [
+    { label: 'v1/v2\nBoustrophedon\n网格分解', val: 42, color: 'var(--critical)', desc: '42 个 cell' },
+    { label: 'v3\nSweep\n扫描线分解', val: 7, color: 'var(--good)', desc: '7 个 cell' },
+  ];
+
+  const yMax = 50;
+  [0, 10, 20, 30, 40, 50].forEach(v => {
+    const y = M.top + innerH - (v / yMax) * innerH;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', M.left); line.setAttribute('x2', W - M.right);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('class', 'grid-line'); svg.appendChild(line);
+
+    const text = document.createElementNS(NS, 'text');
+    text.setAttribute('x', M.left - 8); text.setAttribute('y', y + 4);
+    text.setAttribute('text-anchor', 'end'); text.setAttribute('class', 'tick-text');
+    text.textContent = v; svg.appendChild(text);
+  });
+
+  const groupW = innerW / data.length, barW = Math.min(90, groupW * 0.45);
+  const pad = (groupW - barW) / 2;
+
+  data.forEach((d, i) => {
+    const x = M.left + i * groupW + pad;
+    const barH = (d.val / yMax) * innerH;
+    const y = M.top + innerH - barH;
+
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', barW); rect.setAttribute('height', barH);
+    rect.setAttribute('rx', '4'); rect.setAttribute('fill', d.color);
+    rect.setAttribute('class', 'bar');
+    svg.appendChild(rect);
+
+    // Giant number in bar
+    const vt = document.createElementNS(NS, 'text');
+    vt.setAttribute('x', x + barW/2); vt.setAttribute('y', y - 12);
+    vt.setAttribute('text-anchor', 'middle');
+    vt.setAttribute('fill', 'var(--text-primary)'); vt.style.fontWeight = '800';
+    vt.style.fontSize = '28px'; vt.textContent = d.val;
+    svg.appendChild(vt);
+
+    // Description
+    const dt = document.createElementNS(NS, 'text');
+    dt.setAttribute('x', x + barW/2); dt.setAttribute('y', y - 32);
+    dt.setAttribute('text-anchor', 'middle'); dt.setAttribute('fill', 'var(--text-secondary)');
+    dt.style.fontSize = '12px'; dt.textContent = d.desc;
+    svg.appendChild(dt);
+
+    // X labels
+    const lines = d.label.split('\n');
+    lines.forEach((ln, li) => {
+      const lt = document.createElementNS(NS, 'text');
+      lt.setAttribute('x', x + barW/2); lt.setAttribute('y', M.top + innerH + 16 + li * 16);
+      lt.setAttribute('text-anchor', 'middle'); lt.setAttribute('class', 'tick-text');
+      if (li === 0) lt.style.fontWeight = '600';
+      else lt.style.fontSize = '10px';
+      lt.textContent = ln; svg.appendChild(lt);
+    });
+  });
+
+  // Reduction arrow in middle
+  const reduction = 42 - 7;
+  const mx = M.left + innerW / 2;
+  const my = M.top + 20;
+  const rt = document.createElementNS(NS, 'text');
+  rt.setAttribute('x', mx); rt.setAttribute('y', my);
+  rt.setAttribute('text-anchor', 'middle'); rt.setAttribute('fill', 'var(--good)');
+  rt.style.fontWeight = '700'; rt.style.fontSize = '15px';
+  rt.textContent = '↓ −' + reduction + ' cells (6× 缩减)';
+  svg.appendChild(rt);
+
+  // Baseline
+  const bl = document.createElementNS(NS, 'line');
+  bl.setAttribute('x1', M.left); bl.setAttribute('x2', W - M.right);
+  bl.setAttribute('y1', M.top + innerH); bl.setAttribute('y2', M.top + innerH);
+  bl.setAttribute('class', 'axis-line'); svg.appendChild(bl);
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,140 @@
+#!/bin/bash
+# F2C 一站式开发工作流
+# 用法:
+#   ./sync_and_build.sh                      # 仅同步+编译
+#   ./sync_and_build.sh --test [scenario]    # 同步+编译+跑单场景（默认 notched）
+#   ./sync_and_build.sh --batch              # 同步+编译+6场景批量测试+渲染+拉回结果
+#   ./sync_and_build.sh --compare            # 同步+编译+S3/S4/S6 自定义 vs Snake 对比
+#   ./sync_and_build.sh --run                # 同步+编译+远程启动 notched RViz 演示
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 自动定位项目根目录：无论脚本放在 scripts/ 还是项目根，都能找到 src/
+if [[ "$SCRIPT_DIR" == */scripts ]]; then
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PROJECT_ROOT="$SCRIPT_DIR"
+fi
+# ── 用户配置（使用前请修改）──
+VM_HOST="dc@192.168.83.129"   # 改为你的 VM 用户名@IP
+WS="~/f2c_coverage_planner"    # 改为你的 VM 端工作空间路径
+RESULT_BASE="$PROJECT_ROOT/test_results"
+
+# 场景映射
+declare -A SCENARIOS=(
+    ["notched"]="${WS}/src/yingshi_robot/config/f2c_areas/notched_10m_with_center_hole.yaml"
+    ["S1"]="${WS}/src/yingshi_robot/test_polygons/S1_S1_convex_rect.yaml"
+    ["S2"]="${WS}/src/yingshi_robot/test_polygons/S2_S2_L_shaped.yaml"
+    ["S3"]="${WS}/src/yingshi_robot/test_polygons/S3_S3_with_holes.yaml"
+    ["S4"]="${WS}/src/yingshi_robot/test_polygons/S4_S4_narrow_corridor.yaml"
+    ["S5"]="${WS}/src/yingshi_robot/test_polygons/S5_S5_irregular.yaml"
+    ["S6"]="${WS}/src/yingshi_robot/test_polygons/S6_S6_multi_region.yaml"
+)
+
+# ── Step 0: 检查 SSH 连接 ──
+if ! ssh -o ConnectTimeout=3 -o BatchMode=yes "$VM_HOST" "echo ok" >/dev/null 2>&1; then
+    echo "❌ 无法连接到 VM ($VM_HOST)"
+    echo ""
+    echo "请确认："
+    echo "  1. VM 已开机且网络正常"
+    echo "  2. 已配置 SSH 免密登录（详见 SETUP_GUIDE.md §4）"
+    echo "  3. VM_HOST 和用户名正确（编辑本脚本第 18-19 行）"
+    exit 1
+fi
+
+# ── Step 1: 同步源码 ──
+echo "📤 Syncing sources..."
+# 同步所有源码 + 模块文件 + 脚本
+scp -q "$PROJECT_ROOT/src/yingshi_robot/src/"*.cpp "${VM_HOST}:${WS}/src/yingshi_robot/src/"
+scp -q "$PROJECT_ROOT/src/yingshi_robot/src/"*.hpp "${VM_HOST}:${WS}/src/yingshi_robot/src/"
+scp -q "$PROJECT_ROOT/src/yingshi_robot/include/yingshi_robot/"*.hpp "${VM_HOST}:${WS}/src/yingshi_robot/include/yingshi_robot/"
+scp -q "$PROJECT_ROOT/src/yingshi_robot/CMakeLists.txt" "${VM_HOST}:${WS}/src/yingshi_robot/"
+scp -q "$PROJECT_ROOT/scripts/"*.sh "${VM_HOST}:${WS}/scripts/" 2>/dev/null || true
+scp -q "$PROJECT_ROOT/scripts/"*.py "${VM_HOST}:${WS}/scripts/" 2>/dev/null || true
+echo "   Done."
+
+# ── Step 2: 编译 ──
+echo "🔨 Building..."
+BUILD_OUT=$(ssh "${VM_HOST}" "cd ${WS} && source /opt/ros/humble/setup.bash && colcon build --packages-select yingshi_robot 2>&1")
+if echo "$BUILD_OUT" | grep -qE "error:|fatal error"; then
+    echo "❌ Build failed:"
+    echo "$BUILD_OUT" | grep -E "error:|fatal error" | head -10
+    exit 1
+fi
+echo "   $(echo "$BUILD_OUT" | grep 'Summary' || echo 'Done')"
+
+# ── 解析命令行 ──
+MODE="${1:-}"
+SCENARIO="${2:-notched}"
+
+# ── Mode: --test ──
+if [[ "$MODE" == "--test" ]]; then
+    echo ""
+    echo "🧪 Testing: ${SCENARIO}..."
+    ssh -t "${VM_HOST}" "bash ${WS}/scripts/run_test_on_vm.sh ${SCENARIO}" 2>&1
+
+# ── Mode: --batch ──
+elif [[ "$MODE" == "--batch" ]]; then
+    echo ""
+    echo "📊 Batch testing 6 scenarios..."
+    TIMESTAMP=$(date +%m%d_%H%M)
+    VM_RESULT="$WS/test_results/batch_${TIMESTAMP}"
+    mkdir -p "$RESULT_BASE/batch_${TIMESTAMP}"
+
+    ssh "${VM_HOST}" "
+        source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
+        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        bash ${WS}/scripts/batch_test_v2.sh ${VM_RESULT} 2>&1
+    " 2>&1 | tee /tmp/f2c_batch.log
+
+    echo ""
+    echo "📥 Copying results..."
+    scp -q "${VM_HOST}:${VM_RESULT}/*.png" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
+    scp -q "${VM_HOST}:${VM_RESULT}/*.json" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
+    scp -q "${VM_HOST}:${VM_RESULT}/*.txt" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
+    echo "   → $RESULT_BASE/batch_${TIMESTAMP}/"
+
+# ── Mode: --compare ──
+elif [[ "$MODE" == "--compare" ]]; then
+    echo ""
+    echo "🔬 Comparing Custom vs Snake (S3, S4, S6)..."
+    TIMESTAMP=$(date +%m%d_%H%M)
+    mkdir -p "$RESULT_BASE/compare_${TIMESTAMP}"
+
+    ssh "${VM_HOST}" "
+        source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
+        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        bash ${WS}/scripts/compare_snake_vs_custom.sh 2>&1
+    " 2>&1
+
+    echo ""
+    echo "📥 Copying comparison images..."
+    # 找最新 compare 目录
+    LATEST_COMPARE=$(ssh "${VM_HOST}" "ls -td ${WS}/test_results/compare_snake_* | head -1")
+    if [ -n "$LATEST_COMPARE" ]; then
+        scp -q "${VM_HOST}:${LATEST_COMPARE}/*.png" "$RESULT_BASE/compare_${TIMESTAMP}/" 2>/dev/null || true
+    fi
+    echo "   → $RESULT_BASE/compare_${TIMESTAMP}/"
+
+# ── Mode: --run ──
+elif [[ "$MODE" == "--run" ]]; then
+    echo ""
+    echo "🚀 Launching notched scenario on VM..."
+    echo "   (Press Ctrl-C in VM terminal to stop)"
+    ssh -t "${VM_HOST}" "
+        source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
+        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        bash ${WS}/install/yingshi_robot/share/yingshi_robot/scripts/run_f2c_optimized.sh 2>&1
+    "
+
+# ── Mode: default (sync+build only) ──
+else
+    echo ""
+    echo "✅ Sync + build done."
+    echo ""
+    echo "Usage:"
+    echo "  ./sync_and_build.sh --test [notched|S1-S6]   # 单场景快速测试"
+    echo "  ./sync_and_build.sh --batch                    # 6场景批量测试+渲染"
+    echo "  ./sync_and_build.sh --compare                  # 自定义 vs Snake 对比"
+    echo "  ./sync_and_build.sh --run                      # 启动 notched RViz"
+fi
