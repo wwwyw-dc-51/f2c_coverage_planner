@@ -61,6 +61,17 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
+
+  ament_add_gtest(decomposer_test
+    test/decomposer_test.cpp
+    src/decomposer.cpp
+  )
+  target_link_libraries(decomposer_test
+    Fields2Cover::Fields2Cover
+  )
+  target_include_directories(decomposer_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 install(TARGETS

@@ -583,170 +583,6 @@ private:
         return adjusted_swaths_by_cells;
     }
 
-    // 网格分解：以生成边界（work_area，侵蚀后 mid_hl）的顶点建网格，确保 cell 与工作区域边界对齐
-    // 孔洞顶点也被纳入网格，因此孔洞边界自然成为 cell 边界
-    f2c::types::Cells rectilinearDecompose(
-        const f2c::types::Cell& work_area,
-        const f2c::types::Cell& grid_src,
-        bool sweep_only = false) const
-    {
-        (void)grid_src;  // 不再使用原始边界，以生成边界为准
-        RCLCPP_INFO(this->get_logger(),
-                   "rectilinearDecompose: work_area has %zu rings (1 ext + %zu holes), sweep_only=%d",
-                   work_area.size(), work_area.size() - 1, sweep_only);
-
-        // 1. 收集坐标
-        std::vector<double> xs, ys;
-        auto collect_xy = [&](const f2c::types::LinearRing& ring) {
-            for (size_t i = 0; i + 1 < ring.size(); ++i) {
-                xs.push_back(ring.getGeometry(i).getX());
-                ys.push_back(ring.getGeometry(i).getY());
-            }
-        };
-        auto collect_y = [&](const f2c::types::LinearRing& ring) {
-            for (size_t i = 0; i + 1 < ring.size(); ++i)
-                ys.push_back(ring.getGeometry(i).getY());
-        };
-
-        if (sweep_only) {
-            // sweep模式: 只收集孔洞顶点y, 水平条带全宽
-            collect_y(work_area.getExteriorRing());
-            for (size_t ri = 0; ri + 1 < work_area.size(); ++ri)
-                collect_y(work_area.getInteriorRing(ri));
-            // x只用外边界极值
-            for (size_t i = 0; i + 1 < work_area.getExteriorRing().size(); ++i) {
-                xs.push_back(work_area.getExteriorRing().getGeometry(i).getX());
-            }
-        } else {
-            collect_xy(work_area.getExteriorRing());
-            for (size_t ri = 0; ri + 1 < work_area.size(); ++ri)
-                collect_xy(work_area.getInteriorRing(ri));
-        }
-
-        std::sort(xs.begin(), xs.end());
-        std::sort(ys.begin(), ys.end());
-        auto dedup = [](std::vector<double>& v) {
-            v.erase(std::unique(v.begin(), v.end(),
-                [](double a, double b) { return std::abs(a-b) < 1e-6; }), v.end());
-        };
-        dedup(xs);
-        dedup(ys);
-
-        if (ys.size() < 2) {
-            f2c::types::Cells fallback;
-            fallback.addGeometry(work_area);
-            return fallback;
-        }
-
-        // sweep模式: 强制x为全宽范围
-        if (sweep_only) {
-            double xmin = *std::min_element(xs.begin(), xs.end());
-            double xmax = *std::max_element(xs.begin(), xs.end());
-            xs.clear();
-            xs.push_back(xmin);
-            xs.push_back(xmax);
-        }
-
-        if (xs.size() < 2) {
-            f2c::types::Cells fallback;
-            fallback.addGeometry(work_area);
-            return fallback;
-        }
-
-        RCLCPP_INFO(this->get_logger(),
-                    "Decompose: %zu x-lines × %zu y-lines → %zu candidate cells (sweep=%d)",
-                    xs.size(), ys.size(), (xs.size()-1)*(ys.size()-1), sweep_only);
-
-        // 2. 创建网格/条带矩形，与 work_area 求交
-        f2c::types::Cells result;
-        for (size_t i = 0; i + 1 < xs.size(); ++i) {
-            for (size_t j = 0; j + 1 < ys.size(); ++j) {
-                double x0 = xs[i], x1 = xs[i+1];
-                double y0 = ys[j], y1 = ys[j+1];
-                double cw = x1 - x0, ch = y1 - y0;
-                if (cw < 0.01 || ch < 0.01) continue;
-
-                f2c::types::LinearRing ring;
-                ring.addPoint(f2c::types::Point(x0, y0));
-                ring.addPoint(f2c::types::Point(x1, y0));
-                ring.addPoint(f2c::types::Point(x1, y1));
-                ring.addPoint(f2c::types::Point(x0, y1));
-                ring.addPoint(f2c::types::Point(x0, y0));
-
-                f2c::types::Cell grid_cell;
-                grid_cell.addRing(ring);
-
-                auto intersected = f2c::types::Cells::intersection(grid_cell, work_area);
-                for (size_t ci = 0; ci < intersected.size(); ++ci) {
-                    f2c::types::Cell cell = intersected.getGeometry(ci);
-                    if (cell.size() > 1) {
-                        f2c::types::Cells single;
-                        single.addGeometry(cell);
-                        for (size_t hi = 0; hi + 1 < cell.size(); ++hi) {
-                            f2c::types::Cell hole_cell;
-                            hole_cell.addRing(cell.getInteriorRing(hi));
-                            f2c::types::Cells hole_cells;
-                            hole_cells.addGeometry(hole_cell);
-                            hole_cells = hole_cells.buffer(0.001);
-                            single = single.difference(hole_cells);
-                        }
-                        for (size_t si = 0; si < single.size(); ++si)
-                            result.addGeometry(single.getGeometry(si));
-                    } else {
-                        result.addGeometry(cell);
-                    }
-                }
-            }
-        }
-        if (result.size() == 0) result.addGeometry(work_area);
-
-        // Sweep模式后处理：对贴近孔洞的cell做显式减法（防止intersection遗漏小孔洞）
-        if (sweep_only && work_area.size() > 1) {
-            for (size_t hi = 0; hi + 1 < work_area.size(); ++hi) {
-                const auto& hr = work_area.getInteriorRing(hi);
-                double h_min_x=1e9, h_max_x=-1e9, h_min_y=1e9, h_max_y=-1e9;
-                for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
-                    double hx=hr.getGeometry(vi).getX(), hy=hr.getGeometry(vi).getY();
-                    if(hx<h_min_x)h_min_x=hx;
-                    if(hx>h_max_x)h_max_x=hx;
-                    if(hy<h_min_y)h_min_y=hy;
-                    if(hy>h_max_y)h_max_y=hy;
-                }
-                f2c::types::Cell hole_cell; hole_cell.addRing(hr);
-                f2c::types::Cells hole_cells; hole_cells.addGeometry(hole_cell);
-                hole_cells = hole_cells.buffer(0.001);
-
-                f2c::types::Cells cleaned;
-                for (size_t ci = 0; ci < result.size(); ++ci) {
-                    auto mc = result.getGeometry(ci);
-                    const auto& mr = mc.getExteriorRing();
-                    double c_min_x=1e9,c_max_x=-1e9,c_min_y=1e9,c_max_y=-1e9;
-                    for(size_t vi=0;vi+1<mr.size();++vi){
-                        double cx=mr.getGeometry(vi).getX(),cy=mr.getGeometry(vi).getY();
-                        if(cx<c_min_x)c_min_x=cx;
-                        if(cx>c_max_x)c_max_x=cx;
-                        if(cy<c_min_y)c_min_y=cy;
-                        if(cy>c_max_y)c_max_y=cy;
-                    }
-                    // 只对与孔洞bbox重叠的cell做减法
-                    bool overlaps = (c_min_x < h_max_x && c_max_x > h_min_x &&
-                                    c_min_y < h_max_y && c_max_y > h_min_y);
-                    if (overlaps) {
-                        f2c::types::Cells tmp; tmp.addGeometry(mc);
-                        auto diff = tmp.difference(hole_cells);
-                        for (size_t di = 0; di < diff.size(); ++di)
-                            cleaned.addGeometry(diff.getGeometry(di));
-                    } else {
-                        cleaned.addGeometry(mc);
-                    }
-                }
-                if (cleaned.size() > 0) result = cleaned;
-            }
-        }
-
-        return result;
-    }
-
     // OGR buffer 操作会在直线段上插入多余顶点，移除环上共线冗余顶点 (→ yingshi::simplifyRing)
     f2c::types::LinearRing simplifyRing(const f2c::types::LinearRing& ring,
                                          double angle_tol_deg = 0.5) const
@@ -1701,6 +1537,8 @@ private:
                 for (size_t ci = 0; ci < mid_hl.size(); ++ci) {
                     f2c::types::Cell work_cell = mid_hl.getGeometry(ci);
                     f2c::types::Cell grid_cell = (ci < cells.size()) ? cells.getGeometry(ci) : work_cell;
+                    yingshi::DecomposerParams decomp_params;
+                    decomp_params.use_sweep = use_sweep_decomp_;
 
                     if (std::abs(sweep_align_angle) > 0.001) {
                         // 旋转 -angle → sweep 分解 → 旋转 +angle 回来
@@ -1709,13 +1547,16 @@ private:
                             sweep_align_angle * 180.0 / M_PI);
                         auto rotated = rotateCell(work_cell, -sweep_align_angle);
                         auto rotated_grid = rotateCell(grid_cell, -sweep_align_angle);
-                        auto sub = rectilinearDecompose(rotated, rotated_grid, true);
+                        decomp_params.use_sweep = true;
+                        auto sub = yingshi::rectilinearDecompose(
+                            rotated, rotated_grid, decomp_params);
                         for (size_t si = 0; si < sub.size(); ++si) {
                             auto back = rotateCell(sub.getGeometry(si), sweep_align_angle);
                             decomp_mid_hl.addGeometry(back);
                         }
                     } else {
-                        auto sub = rectilinearDecompose(work_cell, grid_cell, use_sweep_decomp_);
+                        auto sub = yingshi::rectilinearDecompose(
+                            work_cell, grid_cell, decomp_params);
                         for (size_t si = 0; si < sub.size(); ++si)
                             decomp_mid_hl.addGeometry(sub.getGeometry(si));
                     }
