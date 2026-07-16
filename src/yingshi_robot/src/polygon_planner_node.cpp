@@ -1357,8 +1357,8 @@ private:
     // ========== 主规划函数 ==========
     void planCoveragePath(const geometry_msgs::msg::Polygon& polygon, int polygon_id)
     {
+        int index = polygon_id - 1;  // 转换为数组索引（需在 try 外供 catch 访问）
         try {
-            int index = polygon_id - 1;  // 转换为数组索引
             RCLCPP_INFO(this->get_logger(), "Starting coverage path planning for polygon_%d...", polygon_id);
 
             // ── 重置 Vis JSON 状态 ──
@@ -2017,7 +2017,7 @@ private:
                 }
                 if (swaths_by_cells.sizeTotal() == 0) {
                     RCLCPP_WARN(this->get_logger(), "No swaths; skip polygon_%d", polygon_id);
-                    clearPlanningCacheForPolygon(index, true);
+                    this->clearPlanningCacheForPolygon(index, true);
                     return;
                 }
             }
@@ -3594,7 +3594,7 @@ private:
 
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in path planning: %s", e.what());
-            clearPlanningCacheForPolygon(index, true);
+            this->clearPlanningCacheForPolygon(index, true);
         }
     }
 };
