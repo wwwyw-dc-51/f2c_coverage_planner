@@ -15,6 +15,12 @@ void appendConnectedSwath(
     const f2c::types::MultiPoint& connection,
     const f2c::types::Swath& swath);
 
+// 按 Route 中的原始折线逐段生成 direct 路径，不调用 F2C simplifyConnection。
+// connection 的全部控制点都会成为 TURN 段端点，swath 保持 SWATH 类型。
+f2c::types::Path planDirectPath(
+    const f2c::types::Route& route,
+    double cruise_velocity);
+
 // RDP (Ramer-Douglas-Peucker) 路径简化（分段感知版）
 // 先检测转弯点（方向突变标记为段边界），再逐段执行 RDP
 // epsilon: 简化容差 (m)

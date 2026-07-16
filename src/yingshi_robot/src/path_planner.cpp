@@ -24,6 +24,108 @@ void appendConnectedSwath(
     route.addConnectedSwaths(connection, group);
 }
 
+namespace {
+
+void appendSegment(
+    f2c::types::Path& path,
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    f2c::types::PathSectionType type,
+    double velocity)
+{
+    const double length = start.distance(end);
+    if (length <= 1e-9) return;
+
+    const double angle = std::atan2(
+        end.getY() - start.getY(), end.getX() - start.getX());
+    path.addState(
+        start, angle, length,
+        f2c::types::PathDirection::FORWARD, type, velocity);
+}
+
+void appendDistinct(
+    std::vector<f2c::types::Point>& points,
+    const f2c::types::Point& point)
+{
+    if (points.empty() || points.back().distance(point) > 1e-9) {
+        points.push_back(point);
+    }
+}
+
+void appendConnectionPolyline(
+    f2c::types::Path& path,
+    const std::vector<f2c::types::Point>& points,
+    double velocity)
+{
+    for (size_t i = 1; i < points.size(); ++i) {
+        appendSegment(
+            path, points[i - 1], points[i],
+            f2c::types::PathSectionType::TURN, velocity);
+    }
+}
+
+}  // namespace
+
+f2c::types::Path planDirectPath(
+    const f2c::types::Route& route,
+    double cruise_velocity)
+{
+    f2c::types::Path path;
+    const double velocity = cruise_velocity > 0.0 ? cruise_velocity : 1.0;
+    bool has_endpoint = false;
+    f2c::types::Point endpoint;
+
+    for (size_t group_idx = 0;
+         group_idx < route.sizeVectorSwaths(); ++group_idx) {
+        const auto& swaths = route.getSwaths(group_idx);
+        std::vector<f2c::types::Point> connection_points;
+
+        if (has_endpoint) {
+            appendDistinct(connection_points, endpoint);
+        }
+        if (group_idx < route.sizeConnections()) {
+            const auto& connection = route.getConnection(group_idx);
+            for (const auto& point : connection) {
+                appendDistinct(connection_points, point);
+            }
+        }
+        if (swaths.size() > 0) {
+            appendDistinct(connection_points, swaths.at(0).startPoint());
+        }
+        appendConnectionPolyline(path, connection_points, velocity);
+        if (!connection_points.empty()) {
+            endpoint = connection_points.back();
+            has_endpoint = true;
+        }
+
+        for (size_t swath_idx = 0; swath_idx < swaths.size(); ++swath_idx) {
+            if (has_endpoint) {
+                appendSegment(
+                    path, endpoint,
+                    swaths.at(swath_idx).startPoint(),
+                    f2c::types::PathSectionType::TURN,
+                    velocity);
+            }
+            path.appendSwath(swaths.at(swath_idx), velocity);
+            endpoint = swaths.at(swath_idx).endPoint();
+            has_endpoint = true;
+        }
+    }
+
+    if (route.sizeConnections() > route.sizeVectorSwaths()) {
+        std::vector<f2c::types::Point> trailing_points;
+        if (has_endpoint) {
+            appendDistinct(trailing_points, endpoint);
+        }
+        for (const auto& point : route.getLastConnection()) {
+            appendDistinct(trailing_points, point);
+        }
+        appendConnectionPolyline(path, trailing_points, velocity);
+    }
+
+    return path;
+}
+
 // ========== RDP 路径简化（分段感知版）==========
 // Ramer-Douglas-Peucker 算法，剔除共线或近似共线的冗余路径点
 //

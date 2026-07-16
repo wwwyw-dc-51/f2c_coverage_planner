@@ -2803,7 +2803,7 @@ private:
             }
 
             // 使用掉头曲线进行路径规划（基于路由）
-            // "direct"：标准 Dubins（与 "dubins" 等价）
+            // "direct"：严格保留 Route 折线控制点，不做运动学曲线拟合
             // "dubins"：标准 Dubins（仅前进）
             // "dubins_cc"：连续曲率 Dubins + 环路检测（JFR 2025, F2C #150）
             // "reeds_shepp"：Reeds-Shepp（前进+后退）
@@ -2816,10 +2816,8 @@ private:
                 path = pp.planPath(robot, route, dcc);
                 used_planner = "Dubins CC (continuous curv + loop detect)";
             } else if (turn_planner_type_ == "direct") {
-                f2c::pp::PathPlanning pp;
-                f2c::pp::DubinsCurves dc;
-                path = pp.planPath(robot, route, dc);
-                used_planner = "Direct";
+                path = yingshi::planDirectPath(route, robot.getCruiseVel());
+                used_planner = "Direct (route polyline preserved)";
 
             } else if (turn_planner_type_ == "reeds_shepp") {
                 f2c::pp::PathPlanning pp;
@@ -2838,7 +2836,9 @@ private:
             // ── 优化步骤：RDP 路径简化 ──
             //   保存原始路径用于覆盖率计算（简化版会漏判覆盖）
             f2c::types::Path path_pre_rdp = path;
-            if (use_optimized_planner_ && path_simplify_enabled_) {
+            // direct 的 Route 控制点承担绕障约束，禁止再用 RDP 拉成跨区弦线。
+            if (use_optimized_planner_ && path_simplify_enabled_ &&
+                turn_planner_type_ != "direct") {
                 auto simplified_states = simplifyPathRDP(path, path_simplify_tolerance_);
                 path.setStates(simplified_states);
             }

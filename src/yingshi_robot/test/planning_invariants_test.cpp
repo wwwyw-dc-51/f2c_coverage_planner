@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_planner.hpp"
 
 namespace {
@@ -33,6 +34,38 @@ TEST(RouteInvariant, AppendedBoundarySwathStartsANewConnectedGroup)
     ASSERT_EQ(route.getConnection(1).size(), 2U);
     EXPECT_DOUBLE_EQ(route.getConnection(1).getGeometry(0).getX(), 4.0);
     EXPECT_DOUBLE_EQ(route.getSwaths(1).at(0).startPoint().getY(), 1.0);
+}
+
+TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)
+{
+    f2c::types::Route route;
+    f2c::types::Swaths first_group;
+    first_group.push_back(makeSwath(0.0, 0.0, 1.0, 0.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first_group);
+
+    f2c::types::MultiPoint l_connection;
+    l_connection.addPoint(f2c::types::Point(1.0, 0.0));
+    l_connection.addPoint(f2c::types::Point(1.0, 2.0));
+    l_connection.addPoint(f2c::types::Point(2.0, 2.0));
+    yingshi::appendConnectedSwath(
+        route, l_connection, makeSwath(2.0, 2.0, 3.0, 2.0));
+
+    const auto path = yingshi::planDirectPath(route, 1.0);
+    const auto points = yingshi::materializePath(path);
+
+    ASSERT_EQ(path.size(), 4U);
+    EXPECT_EQ(path[0].type, f2c::types::PathSectionType::SWATH);
+    EXPECT_EQ(path[1].type, f2c::types::PathSectionType::TURN);
+    EXPECT_EQ(path[2].type, f2c::types::PathSectionType::TURN);
+    EXPECT_EQ(path[3].type, f2c::types::PathSectionType::SWATH);
+    ASSERT_EQ(points.size(), 5U);
+    EXPECT_DOUBLE_EQ(points[0].getX(), 0.0);
+    EXPECT_DOUBLE_EQ(points[1].getX(), 1.0);
+    EXPECT_DOUBLE_EQ(points[2].getX(), 1.0);
+    EXPECT_DOUBLE_EQ(points[2].getY(), 2.0);
+    EXPECT_DOUBLE_EQ(points[3].getX(), 2.0);
+    EXPECT_DOUBLE_EQ(points[4].getX(), 3.0);
+    EXPECT_DOUBLE_EQ(yingshi::polylineLength(points), 5.0);
 }
 
 }  // namespace
