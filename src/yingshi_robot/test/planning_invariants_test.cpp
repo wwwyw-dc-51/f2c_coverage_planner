@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_planner.hpp"
 
@@ -66,6 +67,27 @@ TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)
     EXPECT_DOUBLE_EQ(points[3].getX(), 2.0);
     EXPECT_DOUBLE_EQ(points[4].getX(), 3.0);
     EXPECT_DOUBLE_EQ(yingshi::polylineLength(points), 5.0);
+}
+
+TEST(HoleGeometry, BuildsAClosedRingFromUnclosedVertices)
+{
+    const std::vector<f2c::types::Point> vertices {
+        f2c::types::Point(1.0, 1.0),
+        f2c::types::Point(3.0, 1.0),
+        f2c::types::Point(3.0, 3.0),
+        f2c::types::Point(1.0, 3.0),
+    };
+
+    const auto ring = yingshi::makeClosedRing(vertices);
+
+    ASSERT_EQ(ring.size(), 5U);
+    EXPECT_DOUBLE_EQ(
+        ring.getGeometry(0).getX(), ring.getGeometry(4).getX());
+    EXPECT_DOUBLE_EQ(
+        ring.getGeometry(0).getY(), ring.getGeometry(4).getY());
+    EXPECT_TRUE(yingshi::pointInPolygon(2.0, 2.0, ring));
+    EXPECT_FALSE(yingshi::pointInPolygon(0.0, 2.0, ring));
+    EXPECT_FALSE(yingshi::pointInPolygon(4.0, 2.0, ring));
 }
 
 }  // namespace

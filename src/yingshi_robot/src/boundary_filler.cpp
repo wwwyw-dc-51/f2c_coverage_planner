@@ -19,25 +19,40 @@
 
 namespace yingshi {
 
+f2c::types::LinearRing makeClosedRing(
+    const std::vector<f2c::types::Point>& points)
+{
+    f2c::types::LinearRing ring;
+    for (const auto& point : points) {
+        ring.addPoint(point);
+    }
+    if (ring.size() >= 3 &&
+        ring.getGeometry(0).distance(
+            ring.getGeometry(ring.size() - 1)) > 0.0) {
+        const auto first = ring.getGeometry(0);
+        ring.addPoint(first);
+    }
+    return ring;
+}
+
 // ========== 射线法：点是否在多边形内部 ==========
 bool pointInPolygon(double px, double py, const f2c::types::LinearRing& ring)
 {
-    int crossings = 0;
-    size_t n = ring.size();
-    for (size_t i = 0; i + 1 < n; ++i) {
-        double x1 = ring.getGeometry(i).getX();
-        double y1 = ring.getGeometry(i).getY();
-        double x2 = ring.getGeometry(i + 1).getX();
-        double y2 = ring.getGeometry(i + 1).getY();
+    bool inside = false;
+    const size_t n = ring.size();
+    if (n < 3) return false;
 
-        if ((y1 > py) != (y2 > py)) {
-            double x_intersect = x1 + (py - y1) * (x2 - x1) / (y2 - y1);
-            if (px < x_intersect) {
-                ++crossings;
-            }
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const double xi = ring.getGeometry(i).getX();
+        const double yi = ring.getGeometry(i).getY();
+        const double xj = ring.getGeometry(j).getX();
+        const double yj = ring.getGeometry(j).getY();
+        if (((yi > py) != (yj > py)) &&
+            (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+            inside = !inside;
         }
     }
-    return (crossings % 2) == 1;
+    return inside;
 }
 
 // ========== 点是否在任意孔洞内 ==========

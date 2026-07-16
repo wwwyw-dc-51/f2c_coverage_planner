@@ -28,6 +28,21 @@
 #include <chrono>
 #include <functional>
 
+namespace {
+
+f2c::types::LinearRing makeClosedF2CRing(
+    const geometry_msgs::msg::Polygon& polygon)
+{
+    std::vector<f2c::types::Point> points;
+    points.reserve(polygon.points.size());
+    for (const auto& point : polygon.points) {
+        points.emplace_back(point.x, point.y);
+    }
+    return yingshi::makeClosedRing(points);
+}
+
+}  // namespace
+
 class PolygonPlannerNode : public rclcpp::Node
 {
 private:
@@ -1412,19 +1427,7 @@ private:
                     double hole_area = calculatePolygonArea(hole);
                     total_holes_area += hole_area;
                     
-                    f2c::types::LinearRing hole_ring;
-                    for (const auto& p : hole.points) {
-                        hole_ring.addPoint(f2c::types::Point(p.x, p.y));
-                    }
-                    
-                    // 确保hole环闭合
-                    if (hole.points.size() > 0 && 
-                        (hole.points.front().x != hole.points.back().x ||
-                         hole.points.front().y != hole.points.back().y)) {
-                        hole_ring.addPoint(f2c::types::Point(
-                            hole.points.front().x, 
-                            hole.points.front().y));
-                    }
+                    const auto hole_ring = makeClosedF2CRing(hole);
                     
                     // 添加为内环（使用addRing方法）
                     cell.addRing(hole_ring);
@@ -2025,18 +2028,8 @@ private:
             std::vector<f2c::types::LinearRing> hole_rings;
             if (!last_holes_[index].empty()) {
                 for (const auto& hole_msg : last_holes_[index]) {
-                    f2c::types::LinearRing hr;
-                    for (const auto& p : hole_msg.points) {
-                        hr.addPoint(f2c::types::Point(p.x, p.y));
-                    }
-                    if (hr.size() >= 3) {
-                        // 确保闭合
-                        auto first = hr.getGeometry(0);
-                        auto last  = hr.getGeometry(hr.size() - 1);
-                        if (std::hypot(first.getX() - last.getX(),
-                                       first.getY() - last.getY()) > 0.001) {
-                            hr.addPoint(f2c::types::Point(first.getX(), first.getY()));
-                        }
+                    auto hr = makeClosedF2CRing(hole_msg);
+                    if (hr.size() >= 4) {
                         hole_rings.push_back(hr);
                     }
                 }
@@ -2323,17 +2316,8 @@ private:
                 // 构建孔洞环（LinearRing，用于射线法 + 交点计算）
                 std::vector<f2c::types::LinearRing> hole_rings;
                 for (const auto& hole_msg : last_holes_[index]) {
-                    f2c::types::LinearRing hr;
-                    for (const auto& p : hole_msg.points) {
-                        hr.addPoint(f2c::types::Point(p.x, p.y));
-                    }
-                    if (hr.size() >= 3) {
-                        auto first = hr.getGeometry(0);
-                        auto last  = hr.getGeometry(hr.size() - 1);
-                        if (std::hypot(first.getX() - last.getX(),
-                                       first.getY() - last.getY()) > 0.001) {
-                            hr.addPoint(f2c::types::Point(first.getX(), first.getY()));
-                        }
+                    auto hr = makeClosedF2CRing(hole_msg);
+                    if (hr.size() >= 4) {
                         hole_rings.push_back(hr);
                     }
                 }
@@ -2848,19 +2832,12 @@ private:
                 std::vector<f2c::types::LinearRing> hole_rings;
                 std::vector<std::pair<double, double>> hole_centers;  // 孔洞中心
                 for (const auto& hole_msg : last_holes_[index]) {
-                    f2c::types::LinearRing hr;
                     double sum_x = 0, sum_y = 0;
                     for (const auto& p : hole_msg.points) {
-                        hr.addPoint(f2c::types::Point(p.x, p.y));
                         sum_x += p.x; sum_y += p.y;
                     }
-                    if (hr.size() >= 3) {
-                        auto first = hr.getGeometry(0);
-                        auto last  = hr.getGeometry(hr.size() - 1);
-                        if (std::hypot(first.getX() - last.getX(),
-                                       first.getY() - last.getY()) > 0.001) {
-                            hr.addPoint(f2c::types::Point(first.getX(), first.getY()));
-                        }
+                    auto hr = makeClosedF2CRing(hole_msg);
+                    if (hr.size() >= 4 && !hole_msg.points.empty()) {
                         hole_rings.push_back(hr);
                         hole_centers.push_back({sum_x / hole_msg.points.size(),
                                                 sum_y / hole_msg.points.size()});
@@ -3309,11 +3286,8 @@ private:
             {
                 std::vector<f2c::types::LinearRing> hole_check_rings;
                 for (const auto& hole : last_holes_[index]) {
-                    f2c::types::LinearRing hr;
-                    for (const auto& p : hole.points) {
-                        hr.addPoint(f2c::types::Point(p.x, p.y));
-                    }
-                    if (hole.points.size() >= 3) hole_check_rings.push_back(hr);
+                    auto hr = makeClosedF2CRing(hole);
+                    if (hr.size() >= 4) hole_check_rings.push_back(hr);
                 }
                 if (!hole_check_rings.empty()) {
                     // lambda: 射线法点-in-孔洞 (→ yingshi::pointInAnyHole)
@@ -3393,11 +3367,8 @@ private:
                 // 构建孔洞环列表（f2c::types::LinearRing 格式）
                 std::vector<f2c::types::LinearRing> hole_rings;
                 for (const auto& hole : last_holes_[index]) {
-                    f2c::types::LinearRing hole_ring;
-                    for (const auto& p : hole.points) {
-                        hole_ring.addPoint(f2c::types::Point(p.x, p.y));
-                    }
-                    if (hole.points.size() >= 3) {
+                    auto hole_ring = makeClosedF2CRing(hole);
+                    if (hole_ring.size() >= 4) {
                         hole_rings.push_back(hole_ring);
                     }
                 }

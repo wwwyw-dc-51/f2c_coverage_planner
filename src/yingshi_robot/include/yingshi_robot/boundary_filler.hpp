@@ -28,6 +28,10 @@ void fillBoundaryGaps(
 
 // ========== 孔洞检测工具 ==========
 
+// 从顶点构造闭合环；若输入未重复首点，则自动补上。
+f2c::types::LinearRing makeClosedRing(
+    const std::vector<f2c::types::Point>& points);
+
 // 点-in-多边形检测（射线法）
 bool pointInPolygon(double px, double py, const f2c::types::LinearRing& ring);
 
