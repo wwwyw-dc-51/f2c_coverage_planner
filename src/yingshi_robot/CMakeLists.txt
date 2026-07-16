@@ -84,6 +84,17 @@ if(BUILD_TESTING)
   target_include_directories(planning_invariants_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
+
+  ament_add_gtest(coverage_evaluator_test
+    test/coverage_evaluator_test.cpp
+  )
+  target_link_libraries(coverage_evaluator_test
+    Fields2Cover::Fields2Cover
+  )
+  target_include_directories(coverage_evaluator_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
 endif()
 
 install(TARGETS

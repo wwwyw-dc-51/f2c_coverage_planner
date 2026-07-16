@@ -39,7 +39,7 @@ struct EvalParams {
     double grid_resolution = 0.1;     ///< 网格法分辨率 (m)
     double coverage_threshold = 0.995;///< 覆盖率达标阈值
     double turn_angle_threshold = 30.0; ///< 转弯判定角度阈值（度）
-    double turn_merge_distance = 0.75; ///< 相邻方向变化归并为同一转弯的路径距离（米）
+    double min_turn_merge_distance = 0.75; ///< 相邻方向变化归并距离下限（米），实际值随有效行距增大
     bool use_grid_method = false;     ///< true=网格法 false=几何法
     const char* turn_planner_type = "direct"; ///< 掉头模式，决定评分方案
     double full_net_area_override = -1.0; ///< 覆盖目标面积覆盖（>0 时覆盖 cell 面积计算），用于纠正headland侵蚀偏差
@@ -83,7 +83,7 @@ struct EvalResult {
 
     // ── 综合评分 ──
     double single_score = 0.0;       ///< 单场景综合得分 (0~100)
-    double coverage_gate = 0.0;      ///< ((coverage_rate - 0.90) / 0.09)^3，三次门控
+    double coverage_gate = 0.0;      ///< 90% 到达标阈值之间归一化后的三次门控
     double efficiency_score = 0.0;   ///< 6 项加权效率分
 
     // ── 评分分解 ──
@@ -94,6 +94,76 @@ struct EvalResult {
     double score_time = 0.0;
     double score_smoothness = 0.0;
 };
+
+namespace coverage_scoring {
+
+constexpr double kCoverageGateLower = 0.90;
+constexpr double kDistanceFreeStretch = 1.15;
+constexpr double kExtraTurnPenalty = 3.0;
+constexpr double kOverlapPenalty = 2.0;
+constexpr double kTurnMergeSpacingFactor = 1.05;
+
+inline double coverageGate(
+    double coverage_rate,
+    double coverage_threshold)
+{
+    if (coverage_rate <= kCoverageGateLower) return 0.0;
+    if (coverage_threshold <= kCoverageGateLower ||
+        coverage_rate >= coverage_threshold) {
+        return 1.0;
+    }
+
+    const double normalized =
+        (coverage_rate - kCoverageGateLower) /
+        (coverage_threshold - kCoverageGateLower);
+    return normalized * normalized * normalized;
+}
+
+inline double distanceScore(double total_distance, double ideal_distance)
+{
+    if (ideal_distance <= 1e-9) {
+        return total_distance <= 1e-9 ? 1.0 : 0.0;
+    }
+    const double stretch = std::max(0.0, total_distance) / ideal_distance;
+    return std::exp(-std::max(0.0, stretch - kDistanceFreeStretch));
+}
+
+inline double workRatioScore(double work_ratio)
+{
+    if (work_ratio <= 0.0) return 0.0;
+    return work_ratio <= 1.0 ? work_ratio : 1.0 / work_ratio;
+}
+
+inline double turnScore(int turn_count, int swath_count)
+{
+    const int baseline_turns = std::max(0, swath_count - 1);
+    const int extra_turns = std::max(0, turn_count - baseline_turns);
+    const double baseline = std::max(1, baseline_turns);
+    return std::exp(-kExtraTurnPenalty * extra_turns / baseline);
+}
+
+inline double overlapScore(
+    double measured_overlap,
+    double planned_overlap)
+{
+    const double bounded_planned = std::clamp(planned_overlap, 0.0, 0.999999);
+    const double planned_grid_overlap =
+        bounded_planned / (1.0 - bounded_planned);
+    const double avoidable_overlap =
+        std::max(0.0, measured_overlap - planned_grid_overlap);
+    return std::exp(-kOverlapPenalty * avoidable_overlap);
+}
+
+inline double turnMergeDistance(
+    double effective_width,
+    double configured_minimum)
+{
+    return std::max(
+        std::max(0.0, configured_minimum),
+        kTurnMergeSpacingFactor * std::max(0.0, effective_width));
+}
+
+}  // namespace coverage_scoring
 
 // ============================================================================
 // 2. 几何工具函数
@@ -491,16 +561,20 @@ inline EvalResult evaluatePlan(
                    ? (r.swath_total_dist / r.total_distance)
                    : 0.0;
 
+    const double effective_width =
+        params.coverage_width * (1.0 - params.swath_overlap_ratio);
+
     // ── 转弯次数 ──
     r.turn_count = countTurns(
-        path, params.turn_angle_threshold, params.turn_merge_distance);
+        path, params.turn_angle_threshold,
+        coverage_scoring::turnMergeDistance(
+            effective_width, params.min_turn_merge_distance));
 
     // ── 重叠率 ──
     // 网格法：基于最终路径扫掠的逐格元访问计数（真实重叠，无估算）
     // 几何法：swath 总长 × 有效间距 vs 净面积（近似，不读最终路径）
     if (!grid_overlap_ready) {
         if (r.net_area > 0.0) {
-            double effective_width = params.coverage_width * (1.0 - params.swath_overlap_ratio);
             double expected_coverage = r.swath_total_dist * effective_width;
             r.overlap_rate = std::max(0.0, (expected_coverage - r.net_area) / r.net_area);
         }
@@ -511,38 +585,26 @@ inline EvalResult evaluatePlan(
     r.max_curvature = max_curv;
 
     // ── 综合评分 ──
-    // CoverageGate: sigmoid式陡降，99%→满分，90%→0分
-    // gate = ((coverage - 0.90) / 0.09)^3, clamped to [0, 1]
-    {
-        double x = (r.coverage_rate - 0.90) / 0.09;  // 90%=0, 99%=1
-        if (x <= 0.0) {
-            r.coverage_gate = 0.0;
-        } else if (x >= 1.0) {
-            r.coverage_gate = 1.0;
-        } else {
-            r.coverage_gate = x * x * x;  // x^3, 快速衰减
-        }
-    }
+    // CoverageGate：90% 为零，达到 coverage_threshold 时才满分。
+    r.coverage_gate = coverage_scoring::coverageGate(
+        r.coverage_rate, params.coverage_threshold);
 
     // 路径长度得分：理想路径 = 面积 / 有效间距（全覆盖所需最短swath总长）
-    double effective_width = params.coverage_width * (1.0 - params.swath_overlap_ratio);
     double ideal_dist = r.net_area / std::max(0.01, effective_width);
-    double ref_dist = ideal_dist * 1.15;  // +15% 容差（headland 连接、掉头过渡）
-    r.score_distance = std::exp(-std::max(0.0, r.total_distance - ideal_dist) / std::max(ref_dist, 1.0));
+    r.score_distance = coverage_scoring::distanceScore(
+        r.total_distance, ideal_dist);
 
-    // 有效工作比得分（封顶 1.0，>1.0 表示重叠过多应惩罚而非奖励）
-    r.score_work_ratio = std::min(1.0, r.work_ratio);
+    // 有效工作比以 1.0 为最佳；偏低和超过 1.0 都会扣分。
+    r.score_work_ratio = coverage_scoring::workRatioScore(r.work_ratio);
 
-    // 转弯得分
-    double turns_per_swath = (r.swath_count > 0)
-                             ? static_cast<double>(r.turn_count) / r.swath_count
-                             : 1.0;
-    r.score_turns = std::exp(-turns_per_swath);
+    // 往复式覆盖固有的 N-1 次掉头不扣分，只惩罚额外转弯。
+    r.score_turns = coverage_scoring::turnScore(
+        r.turn_count, r.swath_count);
 
-    // 重叠得分：低重叠时线性衰减，高重叠时指数衰减（有区分度）
-    r.score_overlap = (r.overlap_rate <= 1.0)
-        ? std::max(0.0, 1.0 - r.overlap_rate)
-        : std::exp(-r.overlap_rate);  // >100% 时指数衰减，110%→0.33, 200%→0.14
+    // 网格法会测到主动设置的相邻 swath 重叠，几何法已用有效宽度扣除。
+    r.score_overlap = coverage_scoring::overlapScore(
+        r.overlap_rate,
+        grid_overlap_ready ? params.swath_overlap_ratio : 0.0);
 
     // 耗时得分（5 秒为上限）
     r.score_time = std::max(0.0, 1.0 - r.planning_time_ms / 5000.0);
@@ -623,7 +685,8 @@ inline std::string formatEvalReport(const EvalResult& r, const char* scenario_na
     oss << "\n--- \u7efc\u5408\u8bc4\u5206 ---\n";
     double w_work = is_direct ? 33.0 : 30.0;
     double w_dist = is_direct ? 27.0 : 25.0;
-    oss << std::setprecision(3) << "\u8986\u76d6\u7387\u7cfb\u6570: " << r.coverage_gate << " (\u8986\u76d6\u7387^10)\n";
+    oss << std::setprecision(3) << "\u8986\u76d6\u7387\u7cfb\u6570: " << r.coverage_gate
+        << " (90%\u81f3\u8fbe\u6807\u9608\u503c\u7684\u4e09\u6b21\u95e8\u63a7)\n";
     oss << "\u6709\u6548\u5de5\u4f5c\u6bd4: " << (r.score_work_ratio*w_work) << "/" << (int)w_work << "\n";
     oss << "\u8def\u5f84\u957f\u5ea6: " << (r.score_distance*w_dist) << "/" << (int)w_dist << "\n";
     oss << "\u8f6c\u5f2f\u6b21\u6570: " << (r.score_turns*15) << "/15\n";
