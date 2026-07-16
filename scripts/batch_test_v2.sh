@@ -26,8 +26,8 @@ declare -A SCENARIOS=(
 )
 
 PLANNER_PARAMS=(
-    -p robot_width:=0.95
-    -p coverage_width:=0.45
+    -p robot_width:=0.75
+    -p coverage_width:=0.90
     -p mid_hl_width_ratio:=0.20
     -p no_hl_width_ratio:=0.0
     -p min_hole_area:=1.0
