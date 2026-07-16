@@ -1,0 +1,217 @@
+from contextlib import redirect_stdout
+import io
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from audit_test_report import audit_report, main
+
+
+class AuditReportTest(unittest.TestCase):
+    def test_clean_report_has_no_findings(self):
+        report = {
+            "path": [{"x": 1.0, "y": 5.0}, {"x": 9.0, "y": 5.0}],
+            "swaths": [{"points": [{"x": 1.0, "y": 5.0}, {"x": 9.0, "y": 5.0}]}],
+            "connections": [],
+            "eval": {"turn_count": 0},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertEqual(findings, [])
+
+    def test_reports_missing_final_path(self):
+        report = {
+            "path": [],
+            "swaths": [{"points": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("PATH_MISSING", {finding.code for finding in findings})
+
+    def test_reports_missing_swath_evidence(self):
+        report = {
+            "path": [{"x": 1.0, "y": 1.0}, {"x": 9.0, "y": 1.0}],
+            "swaths": [],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("EMPTY_SWATHS", {finding.code for finding in findings})
+
+    def test_reports_turn_count_that_disagrees_with_final_path(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 1.0},
+                {"x": 9.0, "y": 1.0},
+                {"x": 9.0, "y": 9.0},
+                {"x": 1.0, "y": 9.0},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 1.0}, {"x": 9.0, "y": 1.0}]}],
+            "eval": {"turn_count": 0},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("TURN_COUNT_MISMATCH", {finding.code for finding in findings})
+
+    def test_reports_path_length_outside_the_work_area(self):
+        report = {
+            "path": [{"x": -1.0, "y": 5.0}, {"x": 1.0, "y": 5.0}],
+            "swaths": [{"points": [{"x": 0.0, "y": 5.0}, {"x": 1.0, "y": 5.0}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("CENTERLINE_OUTSIDE", {finding.code for finding in findings})
+
+    def test_treats_short_centerline_excursion_as_warning(self):
+        report = {
+            "path": [{"x": -0.2, "y": 5.0}, {"x": 0.2, "y": 5.0}],
+            "swaths": [{"points": [{"x": 0.0, "y": 5.0}, {"x": 0.2, "y": 5.0}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+        finding = next(item for item in findings if item.code == "CENTERLINE_OUTSIDE")
+
+        self.assertEqual(finding.severity, "warning")
+
+    def test_reports_robot_footprint_clearance_violation(self):
+        report = {
+            "path": [{"x": 1.0, "y": 0.2}, {"x": 9.0, "y": 0.2}],
+            "swaths": [{"points": [{"x": 1.0, "y": 0.2}, {"x": 9.0, "y": 0.2}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon, robot_width=1.0)
+
+        self.assertIn("FOOTPRINT_CLEARANCE", {finding.code for finding in findings})
+
+    def test_reports_excessive_sub_centimeter_segments(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 1.0},
+                {"x": 1.005, "y": 1.0},
+                {"x": 2.005, "y": 1.0},
+                {"x": 2.010, "y": 1.0},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("TINY_SEGMENTS", {finding.code for finding in findings})
+
+    def test_reports_retraced_path_length(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 5.0},
+                {"x": 3.0, "y": 5.0},
+                {"x": 1.0, "y": 5.0},
+                {"x": 3.0, "y": 5.0},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 5.0}, {"x": 3.0, "y": 5.0}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("RETRACE_LENGTH", {finding.code for finding in findings})
+
+    def test_reports_retrace_with_different_segment_sampling(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 5.0},
+                {"x": 3.0, "y": 5.0},
+                {"x": 2.27, "y": 5.0},
+                {"x": 1.0, "y": 5.0},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 5.0}, {"x": 3.0, "y": 5.0}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("RETRACE_LENGTH", {finding.code for finding in findings})
+
+    def test_reports_connections_without_provenance(self):
+        report = {
+            "path": [{"x": 1.0, "y": 5.0}, {"x": 3.0, "y": 5.0}],
+            "swaths": [{"points": [{"x": 1.0, "y": 5.0}, {"x": 3.0, "y": 5.0}]}],
+            "connections": [{"from_cell": 0, "to_cell": 1, "path": [[1.0, 5.0], [3.0, 5.0]]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("CONNECTION_PROVENANCE", {finding.code for finding in findings})
+
+    def test_cli_writes_markdown_for_every_scenario(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            batch = root / "test_results" / "batch"
+            polygons = root / "src" / "yingshi_robot" / "test_polygons"
+            batch.mkdir(parents=True)
+            polygons.mkdir(parents=True)
+            (batch / "S1_data.json").write_text(json.dumps({
+                "path": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}],
+                "swaths": [],
+                "eval": {},
+            }), encoding="utf-8")
+            (polygons / "S1_square.yaml").write_text(
+                "polygon:\n  - [0, 0]\n  - [10, 0]\n  - [10, 10]\n  - [0, 10]\nholes: []\n",
+                encoding="utf-8",
+            )
+            markdown = root / "audit.md"
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = main([
+                    str(batch), "--repo-root", str(root), "--markdown", str(markdown),
+                ])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("EMPTY_SWATHS", markdown.read_text(encoding="utf-8"))
+
+    def test_cli_keeps_auditing_when_one_report_is_invalid_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            batch = root / "test_results" / "batch"
+            polygons = root / "src" / "yingshi_robot" / "test_polygons"
+            batch.mkdir(parents=True)
+            polygons.mkdir(parents=True)
+            (batch / "S1_data.json").write_text("{broken", encoding="utf-8")
+            (polygons / "S1_square.yaml").write_text(
+                "polygon:\n  - [0, 0]\n  - [10, 0]\n  - [10, 10]\n  - [0, 10]\nholes: []\n",
+                encoding="utf-8",
+            )
+            markdown = root / "audit.md"
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = main([
+                    str(batch), "--repo-root", str(root), "--markdown", str(markdown),
+                ])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("REPORT_READ_ERROR", markdown.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    unittest.main()
