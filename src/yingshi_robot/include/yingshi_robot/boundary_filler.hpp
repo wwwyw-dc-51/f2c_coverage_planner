@@ -23,7 +23,8 @@ void fillBoundaryGaps(
     const f2c::types::Cell& full_polygon,
     double swath_angle,
     double cov_width,
-    double shrink_dist);
+    double shrink_dist,
+    double robot_half_width = 0.0);
 
 // ========== 孔洞检测工具 ==========
 

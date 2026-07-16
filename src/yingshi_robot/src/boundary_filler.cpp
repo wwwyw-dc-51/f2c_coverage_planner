@@ -78,15 +78,18 @@ void fillBoundaryGaps(
     const f2c::types::Cell& full_polygon,
     double swath_angle,
     double cov_width,
-    double shrink_dist)
+    double shrink_dist,
+    double robot_half_width)
 {
     if (cell_swaths.size() == 0) return;
     const auto& cell_ring = cell.getExteriorRing();
     if (cell_ring.size() < 3) return;
     const auto& poly_ring = full_polygon.getExteriorRing();
 
-    double half_w = cov_width * 0.5;
-    (void)shrink_dist;  // 补线偏移固定用 half_w，端点缩进由 adjustSwathEndpoints 单独处理
+    // 碰撞安全: 补线偏移用 robot_half_width，确保机器人不越界
+    // 未提供时回退到 cov_width/2（兼容旧调用）
+    double boundary_offset = (robot_half_width > 0.0) ? robot_half_width : (cov_width * 0.5);
+    (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
     double c_min_x = 1e9, c_max_x = -1e9, c_min_y = 1e9, c_max_y = -1e9;
@@ -167,10 +170,10 @@ void fillBoundaryGaps(
                 n_x = -n_x; n_y = -n_y;
             }
 
-            // 边界 swath：多边形边向内偏移 half_w
+            // 边界 swath：多边形边向内偏移 boundary_offset（robot_half_width）
             f2c::types::LineString bline;
-            bline.addPoint(f2c::types::Point(px1 + half_w * n_x, py1 + half_w * n_y));
-            bline.addPoint(f2c::types::Point(px2 + half_w * n_x, py2 + half_w * n_y));
+            bline.addPoint(f2c::types::Point(px1 + boundary_offset * n_x, py1 + boundary_offset * n_y));
+            bline.addPoint(f2c::types::Point(px2 + boundary_offset * n_x, py2 + boundary_offset * n_y));
 
             // 裁剪到多边形内 + 排除孔洞
             f2c::types::Cells poly_tmp;
@@ -275,8 +278,8 @@ void fillBoundaryGaps(
 
             // 孔洞边界 swath：向外偏移 half_w
             f2c::types::LineString bline;
-            bline.addPoint(f2c::types::Point(px1 + half_w * n_x, py1 + half_w * n_y));
-            bline.addPoint(f2c::types::Point(px2 + half_w * n_x, py2 + half_w * n_y));
+            bline.addPoint(f2c::types::Point(px1 + boundary_offset * n_x, py1 + boundary_offset * n_y));
+            bline.addPoint(f2c::types::Point(px2 + boundary_offset * n_x, py2 + boundary_offset * n_y));
 
             // 裁剪到多边形内
             f2c::types::Cells poly_tmp;

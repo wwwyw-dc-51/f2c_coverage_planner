@@ -1181,10 +1181,10 @@ private:
         double cov_width,
         double shrink_dist) const
     {
-        // 委托给模块完整实现（含 getLinesInside 裁剪 + 孔洞补刀）
+        double robot_hw = robot_width_ * 0.5 + 0.05;  // 机器人半宽 + 安全边距
         size_t before = cell_swaths.size();
         yingshi::fillBoundaryGaps(cell_swaths, cell, full_polygon,
-                                  swath_angle, cov_width, shrink_dist);
+                                  swath_angle, cov_width, shrink_dist, robot_hw);
         size_t after = cell_swaths.size();
         if (after > before) {
             RCLCPP_INFO(this->get_logger(),
@@ -2517,7 +2517,7 @@ private:
             {
                 const auto& outer_ring = cell.getExteriorRing();
                 if (outer_ring.size() >= 4 && swaths_by_cells.size() > 0) {
-                    double half_w = coverage_width_ * 0.5;
+                    double robot_hw = robot_width_ * 0.5 + 0.05;  // 机器人半宽 + 安全边距
                     // 从 route 中第一条 swath 推断扫地方向
                     double s_dx = 1.0, s_dy = 0.0;  // 默认水平
                     if (route.sizeVectorSwaths() > 0 && route.getSwaths(0).size() > 0) {
@@ -2569,8 +2569,8 @@ private:
                         if (n_x * (ccx - emx) + n_y * (ccy - emy) < 0) {
                             n_x = -n_x; n_y = -n_y;  // 指向内侧
                         }
-                        double bx1 = px1 + half_w * n_x, by1 = py1 + half_w * n_y;
-                        double bx2 = px2 + half_w * n_x, by2 = py2 + half_w * n_y;
+                        double bx1 = px1 + robot_hw * n_x, by1 = py1 + robot_hw * n_y;
+                        double bx2 = px2 + robot_hw * n_x, by2 = py2 + robot_hw * n_y;
                         double bproj = ((bx1+bx2)*0.5) * (-s_dy) + ((by1+by2)*0.5) * s_dx;
 
                         // 投影在已有范围之外 → 缺失的边界线

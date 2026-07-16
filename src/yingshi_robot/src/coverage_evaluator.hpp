@@ -198,7 +198,7 @@ inline double computeSwathTotalDist(const f2c::types::SwathsByCells& swaths_by_c
     return total;
 }
 
-/// 统计转弯次数（相邻路径段角度变化超过阈值）
+/// 统计转弯次数（基于 PathState 相邻段几何方向，而非 state.angle）
 inline int countTurns(const f2c::types::Path& path, double angle_threshold_deg) {
     int turns = 0;
     if (path.size() < 3) return 0;
@@ -206,19 +206,19 @@ inline int countTurns(const f2c::types::Path& path, double angle_threshold_deg) 
     double threshold_rad = angle_threshold_deg * M_PI / 180.0;
 
     for (size_t i = 1; i < path.size() - 1; ++i) {
-        double angle_prev = path[i - 1].angle;
-        double angle_curr = path[i].angle;
-        double angle_next = path[i + 1].angle;
+        // 用相邻 state 的 point → point 几何方向替代 state.angle
+        double dx_prev = path[i].point.getX() - path[i-1].point.getX();
+        double dy_prev = path[i].point.getY() - path[i-1].point.getY();
+        double angle_prev = std::atan2(dy_prev, dx_prev);
 
-        // 计算前后方向变化
-        double delta1 = std::abs(angle_curr - angle_prev);
-        delta1 = std::min(delta1, 2.0 * M_PI - delta1);
+        double dx_next = path[i+1].point.getX() - path[i].point.getX();
+        double dy_next = path[i+1].point.getY() - path[i].point.getY();
+        double angle_next = std::atan2(dy_next, dx_next);
 
-        double delta2 = std::abs(angle_next - angle_curr);
-        delta2 = std::min(delta2, 2.0 * M_PI - delta2);
+        double delta = std::abs(angle_next - angle_prev);
+        delta = std::min(delta, 2.0 * M_PI - delta);
 
-        // 如果该点前后方向变化都超过阈值，计数
-        if (delta1 > threshold_rad && delta2 > threshold_rad) {
+        if (delta > threshold_rad) {
             ++turns;
         }
     }
