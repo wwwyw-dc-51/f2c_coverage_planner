@@ -2705,6 +2705,18 @@ private:
                            effective_margin);
             }
 
+            // Route 可能在 genRoute 后继续追加边界补线；所有变更完成后统一修复，
+            // 避免后追加 connection 绕过前面的孔洞检查。
+            // 1 mm 仅用于让中心线离开几何边界，机器人外形净空由上游 headland 保证。
+            const size_t final_repaired_connections =
+                yingshi::repairRouteConnectionsAroundHoles(
+                    route, hole_rings, 0.001);
+            if (final_repaired_connections > 0) {
+                RCLCPP_INFO(this->get_logger(),
+                    "Final hole-aware route repair: %zu connections patched",
+                    final_repaired_connections);
+            }
+
             // 从路由中提取所有 swaths 用于可视化（按路由顺序）
             swaths = f2c::types::Swaths();
             for (size_t i = 0; i < route.sizeVectorSwaths(); ++i) {

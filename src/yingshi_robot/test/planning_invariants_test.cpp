@@ -72,6 +72,95 @@ TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)
     EXPECT_DOUBLE_EQ(yingshi::polylineLength(points), 6.0);
 }
 
+TEST(HoleAwareRoute, RepairsBorderFillConnectionAddedAfterRoutePlanning)
+{
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(9.0, 13.5),
+        f2c::types::Point(19.0, 13.5),
+        f2c::types::Point(19.0, 23.5),
+        f2c::types::Point(9.0, 23.5),
+    });
+    const std::vector<f2c::types::LinearRing> holes {hole};
+
+    f2c::types::Route route;
+    f2c::types::Swaths last_planned_group;
+    last_planned_group.push_back(
+        makeSwath(0.21, 13.7865, 0.15, 13.7865, 0.90));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), last_planned_group);
+
+    f2c::types::MultiPoint crossing_connection;
+    crossing_connection.addPoint(f2c::types::Point(0.15, 13.7865));
+    crossing_connection.addPoint(f2c::types::Point(25.0, 24.55));
+    yingshi::appendConnectedSwath(
+        route, crossing_connection,
+        makeSwath(25.0, 24.55, 24.94, 24.55, 0.90));
+
+    ASSERT_TRUE(yingshi::segmentCrossesHole(
+        0.15, 13.7865, 25.0, 24.55, holes, 50));
+
+    EXPECT_EQ(
+        yingshi::repairRouteConnectionsAroundHoles(route, holes, 0.001), 1U);
+
+    const auto& repaired = route.getConnection(1);
+    ASSERT_GT(repaired.size(), 2U);
+    for (size_t i = 0; i + 1 < repaired.size(); ++i) {
+        EXPECT_FALSE(yingshi::segmentCrossesHole(
+            repaired.getGeometry(i).getX(), repaired.getGeometry(i).getY(),
+            repaired.getGeometry(i + 1).getX(),
+            repaired.getGeometry(i + 1).getY(), holes, 50));
+    }
+
+    const auto path_points = yingshi::materializePath(
+        yingshi::planDirectPath(route, 1.0));
+    const auto clearance_ring = f2c::types::Cell::buffer(
+        f2c::types::Cell(hole), 0.0005).getExteriorRing();
+    const std::vector<f2c::types::LinearRing> clearance_area {
+        clearance_ring};
+    for (size_t i = 0; i + 1 < path_points.size(); ++i) {
+        EXPECT_FALSE(yingshi::segmentCrossesHole(
+            path_points[i].getX(), path_points[i].getY(),
+            path_points[i + 1].getX(), path_points[i + 1].getY(), holes, 50));
+        EXPECT_FALSE(yingshi::segmentCrossesHole(
+            path_points[i].getX(), path_points[i].getY(),
+            path_points[i + 1].getX(), path_points[i + 1].getY(),
+            clearance_area, 50));
+    }
+}
+
+TEST(HoleAwareRoute, RepairsImplicitEndpointsAndDropsControlPointInsideHole)
+{
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(9.0, 13.5),
+        f2c::types::Point(19.0, 13.5),
+        f2c::types::Point(19.0, 23.5),
+        f2c::types::Point(9.0, 23.5),
+    });
+    const std::vector<f2c::types::LinearRing> holes {hole};
+
+    f2c::types::Route route;
+    f2c::types::Swaths first_group;
+    first_group.push_back(makeSwath(0.21, 13.7865, 0.15, 13.7865, 0.90));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first_group);
+
+    f2c::types::MultiPoint stale_connection;
+    stale_connection.addPoint(f2c::types::Point(12.0, 19.0));
+    yingshi::appendConnectedSwath(
+        route, stale_connection,
+        makeSwath(25.0, 24.55, 24.94, 24.55, 0.90));
+
+    EXPECT_EQ(
+        yingshi::repairRouteConnectionsAroundHoles(route, holes, 0.001), 1U);
+
+    const auto path_points = yingshi::materializePath(
+        yingshi::planDirectPath(route, 1.0));
+    ASSERT_GT(path_points.size(), 4U);
+    for (size_t i = 0; i + 1 < path_points.size(); ++i) {
+        EXPECT_FALSE(yingshi::segmentCrossesHole(
+            path_points[i].getX(), path_points[i].getY(),
+            path_points[i + 1].getX(), path_points[i + 1].getY(), holes, 50));
+    }
+}
+
 TEST(HoleGeometry, BuildsAClosedRingFromUnclosedVertices)
 {
     const std::vector<f2c::types::Point> vertices {

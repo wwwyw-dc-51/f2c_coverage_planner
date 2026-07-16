@@ -64,7 +64,239 @@ void appendConnectionPolyline(
     }
 }
 
+struct HoleIntersection {
+    double t;
+    size_t hole_idx;
+    size_t edge_idx;
+    f2c::types::Point point;
+};
+
+std::vector<HoleIntersection> findHoleIntersections(
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    const std::vector<f2c::types::LinearRing>& hole_rings)
+{
+    std::vector<HoleIntersection> intersections;
+    const double sx = start.getX();
+    const double sy = start.getY();
+    const double dx = end.getX() - sx;
+    const double dy = end.getY() - sy;
+
+    if (std::hypot(dx, dy) < 1e-12) return intersections;
+
+    for (size_t hole_idx = 0; hole_idx < hole_rings.size(); ++hole_idx) {
+        const auto& ring = hole_rings[hole_idx];
+        for (size_t edge_idx = 0; edge_idx + 1 < ring.size(); ++edge_idx) {
+            const double ax = ring.getGeometry(edge_idx).getX();
+            const double ay = ring.getGeometry(edge_idx).getY();
+            const double bx = ring.getGeometry(edge_idx + 1).getX();
+            const double by = ring.getGeometry(edge_idx + 1).getY();
+            const double edge_dx = bx - ax;
+            const double edge_dy = by - ay;
+            const double denominator = dx * edge_dy - dy * edge_dx;
+            if (std::abs(denominator) < 1e-12) continue;
+
+            const double t = ((ax - sx) * edge_dy - (ay - sy) * edge_dx) /
+                denominator;
+            const double u = ((ax - sx) * dy - (ay - sy) * dx) /
+                denominator;
+            if (t > 1e-8 && t < 1.0 - 1e-8 &&
+                u >= -1e-8 && u <= 1.0 + 1e-8) {
+                intersections.push_back({
+                    t, hole_idx, edge_idx,
+                    f2c::types::Point(sx + t * dx, sy + t * dy)});
+            }
+        }
+    }
+
+    std::sort(
+        intersections.begin(), intersections.end(),
+        [](const HoleIntersection& lhs, const HoleIntersection& rhs) {
+            return lhs.t < rhs.t;
+        });
+    intersections.erase(
+        std::unique(
+            intersections.begin(), intersections.end(),
+            [](const HoleIntersection& lhs, const HoleIntersection& rhs) {
+                return lhs.hole_idx == rhs.hole_idx &&
+                    std::abs(lhs.t - rhs.t) < 1e-8;
+            }),
+        intersections.end());
+    return intersections;
+}
+
+double connectionPolylineLength(const std::vector<f2c::types::Point>& points)
+{
+    double length = 0.0;
+    for (size_t i = 1; i < points.size(); ++i) {
+        length += points[i - 1].distance(points[i]);
+    }
+    return length;
+}
+
+std::vector<f2c::types::Point> walkHoleBoundary(
+    const HoleIntersection& entry,
+    const HoleIntersection& exit,
+    const std::vector<f2c::types::LinearRing>& hole_rings)
+{
+    if (entry.hole_idx != exit.hole_idx) return {};
+
+    const auto& ring = hole_rings[entry.hole_idx];
+    const size_t edge_count = ring.size() > 0 ? ring.size() - 1 : 0;
+    if (edge_count == 0) return {};
+    if (entry.edge_idx == exit.edge_idx) return {entry.point, exit.point};
+
+    auto addVertex = [&](std::vector<f2c::types::Point>& path, size_t index) {
+        path.emplace_back(
+            ring.getGeometry(index).getX(), ring.getGeometry(index).getY());
+    };
+
+    std::vector<f2c::types::Point> forward {entry.point};
+    size_t index = (entry.edge_idx + 1) % edge_count;
+    while (true) {
+        addVertex(forward, index);
+        if (index == exit.edge_idx) break;
+        index = (index + 1) % edge_count;
+    }
+    forward.push_back(exit.point);
+
+    std::vector<f2c::types::Point> backward {entry.point};
+    index = entry.edge_idx;
+    while (true) {
+        addVertex(backward, index);
+        if (index == (exit.edge_idx + 1) % edge_count) break;
+        index = (index + edge_count - 1) % edge_count;
+    }
+    backward.push_back(exit.point);
+
+    return connectionPolylineLength(forward) <=
+        connectionPolylineLength(backward) ? forward : backward;
+}
+
+std::vector<f2c::types::LinearRing> makeAvoidanceRings(
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double clearance)
+{
+    f2c::types::Cells avoidance_cells;
+    for (const auto& ring : hole_rings) {
+        const f2c::types::Cell hole_cell(ring);
+        const auto avoidance_cell = clearance > 1e-9 ?
+            f2c::types::Cell::buffer(hole_cell, clearance) : hole_cell;
+        if (avoidance_cell.getExteriorRing().size() >= 4) {
+            avoidance_cells.addGeometry(avoidance_cell);
+        }
+    }
+    if (avoidance_cells.size() == 0) return hole_rings;
+
+    const auto merged_cells = avoidance_cells.unionCascaded();
+    std::vector<f2c::types::LinearRing> avoidance_rings;
+    avoidance_rings.reserve(merged_cells.size());
+    for (size_t cell_idx = 0; cell_idx < merged_cells.size(); ++cell_idx) {
+        const auto exterior =
+            merged_cells.getGeometry(cell_idx).getExteriorRing();
+        if (exterior.size() >= 4) avoidance_rings.push_back(exterior);
+    }
+    return avoidance_rings.empty() ? hole_rings : avoidance_rings;
+}
+
+std::vector<f2c::types::Point> repairConnectionPolyline(
+    const std::vector<f2c::types::Point>& points,
+    const std::vector<f2c::types::LinearRing>& avoidance_rings,
+    bool& repaired)
+{
+    repaired = false;
+    if (points.size() < 2) return points;
+
+    // genRoute 或旧修补可能留下位于禁入区内的中间控制点。
+    // 去掉这些无效锚点后，由两侧安全端点重新生成绕行折线。
+    std::vector<f2c::types::Point> valid_points;
+    appendDistinct(valid_points, points.front());
+    for (size_t point_idx = 1; point_idx + 1 < points.size(); ++point_idx) {
+        const auto& point = points[point_idx];
+        if (!pointInAnyHole(
+                point.getX(), point.getY(), avoidance_rings)) {
+            appendDistinct(valid_points, point);
+        } else {
+            repaired = true;
+        }
+    }
+    appendDistinct(valid_points, points.back());
+
+    std::vector<f2c::types::Point> result;
+    appendDistinct(result, valid_points.front());
+    for (size_t point_idx = 1; point_idx < valid_points.size(); ++point_idx) {
+        const auto& start = valid_points[point_idx - 1];
+        const auto& end = valid_points[point_idx];
+        const auto intersections =
+            findHoleIntersections(start, end, avoidance_rings);
+
+        for (size_t hit_idx = 0; hit_idx + 1 < intersections.size();) {
+            const auto& entry = intersections[hit_idx];
+            const auto& exit = intersections[hit_idx + 1];
+            if (entry.hole_idx != exit.hole_idx) {
+                ++hit_idx;
+                continue;
+            }
+            const auto detour =
+                walkHoleBoundary(entry, exit, avoidance_rings);
+            for (const auto& point : detour) {
+                appendDistinct(result, point);
+            }
+            repaired = repaired || !detour.empty();
+            hit_idx += 2;
+        }
+        appendDistinct(result, end);
+    }
+    return result;
+}
+
 }  // namespace
+
+size_t repairRouteConnectionsAroundHoles(
+    f2c::types::Route& route,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double clearance)
+{
+    if (hole_rings.empty() || route.sizeConnections() == 0) return 0;
+
+    const auto avoidance_rings = makeAvoidanceRings(hole_rings, clearance);
+    size_t repaired_connections = 0;
+
+    for (size_t connection_idx = 0;
+         connection_idx < route.sizeConnections(); ++connection_idx) {
+        std::vector<f2c::types::Point> points;
+        if (connection_idx > 0 &&
+            connection_idx - 1 < route.sizeVectorSwaths()) {
+            const auto& previous_swaths = route.getSwaths(connection_idx - 1);
+            if (previous_swaths.size() > 0) {
+                appendDistinct(points, previous_swaths.back().endPoint());
+            }
+        }
+
+        const auto& connection = route.getConnection(connection_idx);
+        for (const auto& point : connection) appendDistinct(points, point);
+
+        if (connection_idx < route.sizeVectorSwaths()) {
+            const auto& next_swaths = route.getSwaths(connection_idx);
+            if (next_swaths.size() > 0) {
+                appendDistinct(points, next_swaths.at(0).startPoint());
+            }
+        }
+
+        bool repaired = false;
+        const auto repaired_points =
+            repairConnectionPolyline(points, avoidance_rings, repaired);
+        if (!repaired) continue;
+
+        f2c::types::MultiPoint repaired_connection;
+        for (const auto& point : repaired_points) {
+            repaired_connection.addPoint(point);
+        }
+        route.setConnection(connection_idx, repaired_connection);
+        ++repaired_connections;
+    }
+    return repaired_connections;
+}
 
 f2c::types::Path planDirectPath(
     const f2c::types::Route& route,

@@ -21,6 +21,13 @@ f2c::types::Path planDirectPath(
     const f2c::types::Route& route,
     double cruise_velocity);
 
+// 在 Route 全部生成完成后，修复穿越孔洞的连接折线。
+// 前提：swath 端点位于指定 clearance 之外；返回实际修改的 connection 数量。
+size_t repairRouteConnectionsAroundHoles(
+    f2c::types::Route& route,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double clearance);
+
 // RDP (Ramer-Douglas-Peucker) 路径简化（分段感知版）
 // 先检测转弯点（方向突变标记为段边界），再逐段执行 RDP
 // epsilon: 简化容差 (m)
