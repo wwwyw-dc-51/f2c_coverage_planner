@@ -39,6 +39,7 @@ struct EvalParams {
     double grid_resolution = 0.1;     ///< 网格法分辨率 (m)
     double coverage_threshold = 0.995;///< 覆盖率达标阈值
     double turn_angle_threshold = 30.0; ///< 转弯判定角度阈值（度）
+    double turn_merge_distance = 0.75; ///< 相邻方向变化归并为同一转弯的路径距离（米）
     bool use_grid_method = false;     ///< true=网格法 false=几何法
     const char* turn_planner_type = "direct"; ///< 掉头模式，决定评分方案
     double full_net_area_override = -1.0; ///< 覆盖目标面积覆盖（>0 时覆盖 cell 面积计算），用于纠正headland侵蚀偏差
@@ -198,28 +199,39 @@ inline double computeSwathTotalDist(const f2c::types::SwathsByCells& swaths_by_c
     return total;
 }
 
-/// 统计转弯次数（基于 PathState 相邻段几何方向，而非 state.angle）
-inline int countTurns(const f2c::types::Path& path, double angle_threshold_deg) {
+/// 统计最终发布折线中的转弯动作；一个掉头内的连续方向变化只计一次。
+inline int countTurns(
+    const f2c::types::Path& path,
+    double angle_threshold_deg,
+    double merge_distance = 0.75)
+{
+    const auto points = yingshi::materializePath(path);
     int turns = 0;
-    if (path.size() < 3) return 0;
+    if (points.size() < 3) return turns;
 
-    double threshold_rad = angle_threshold_deg * M_PI / 180.0;
+    const double threshold_rad = angle_threshold_deg * M_PI / 180.0;
+    double arc_distance = 0.0;
+    double last_turn_arc = -std::numeric_limits<double>::infinity();
 
-    for (size_t i = 1; i < path.size() - 1; ++i) {
-        // 用相邻 state 的 point → point 几何方向替代 state.angle
-        double dx_prev = path[i].point.getX() - path[i-1].point.getX();
-        double dy_prev = path[i].point.getY() - path[i-1].point.getY();
-        double angle_prev = std::atan2(dy_prev, dx_prev);
+    for (size_t i = 1; i + 1 < points.size(); ++i) {
+        arc_distance += points[i - 1].distance(points[i]);
+        const double dx_prev = points[i].getX() - points[i - 1].getX();
+        const double dy_prev = points[i].getY() - points[i - 1].getY();
+        const double angle_prev = std::atan2(dy_prev, dx_prev);
 
-        double dx_next = path[i+1].point.getX() - path[i].point.getX();
-        double dy_next = path[i+1].point.getY() - path[i].point.getY();
-        double angle_next = std::atan2(dy_next, dx_next);
+        const double dx_next = points[i + 1].getX() - points[i].getX();
+        const double dy_next = points[i + 1].getY() - points[i].getY();
+        const double angle_next = std::atan2(dy_next, dx_next);
 
         double delta = std::abs(angle_next - angle_prev);
         delta = std::min(delta, 2.0 * M_PI - delta);
 
         if (delta > threshold_rad) {
-            ++turns;
+            if (arc_distance - last_turn_arc > std::max(0.0, merge_distance)) {
+                ++turns;
+            }
+            // 用最近一次方向变化更新锚点，避免一个平滑掉头被拆成多个动作。
+            last_turn_arc = arc_distance;
         }
     }
     return turns;
@@ -452,7 +464,8 @@ inline EvalResult evaluatePlan(
                    : 0.0;
 
     // ── 转弯次数 ──
-    r.turn_count = countTurns(path, params.turn_angle_threshold);
+    r.turn_count = countTurns(
+        path, params.turn_angle_threshold, params.turn_merge_distance);
 
     // ── 重叠率（几何估算，扣除预期重叠） ──
     // 预期重叠来自 swath_overlap_ratio 参数（人为设的重叠不应扣分）

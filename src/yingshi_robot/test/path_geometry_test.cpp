@@ -102,6 +102,54 @@ TEST(PathGeometry, PreservesEveryStateEndpointAcrossDiscontinuities)
     EXPECT_DOUBLE_EQ(points.back().getY(), 11.0);
 }
 
+TEST(PathGeometry, CountsEveryTurnInTheMaterializedPolyline)
+{
+    f2c::types::Path path;
+    path.addState(
+        f2c::types::Point(0.0, 0.0), 0.0, 1.0,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+    path.addState(
+        f2c::types::Point(1.0, 0.0), std::acos(-1.0) / 2.0, 1.0,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::TURN);
+    path.addState(
+        f2c::types::Point(1.0, 1.0), 0.0, 1.0,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+
+    EXPECT_EQ(countTurns(path, 30.0), 2);
+}
+
+TEST(PathGeometry, GroupsNearbyHeadingChangesIntoOneTurnManeuver)
+{
+    constexpr double kStep = 0.1;
+    const double quarter_pi = std::acos(-1.0) / 4.0;
+    f2c::types::Path path;
+    path.addState(
+        f2c::types::Point(0.0, 0.0), 0.0, kStep,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::TURN);
+    path.addState(
+        f2c::types::Point(kStep, 0.0), quarter_pi, kStep,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::TURN);
+    path.addState(
+        f2c::types::Point(kStep + kStep / std::sqrt(2.0),
+                          kStep / std::sqrt(2.0)),
+        2.0 * quarter_pi, kStep,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::TURN);
+    path.addState(
+        f2c::types::Point(kStep + kStep / std::sqrt(2.0),
+                          kStep + kStep / std::sqrt(2.0)),
+        3.0 * quarter_pi, kStep,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::TURN);
+
+    EXPECT_EQ(countTurns(path, 30.0, 0.75), 1);
+}
+
 // 不变量测试：materializePath 是所有路径消费者的唯一数据源。
 // 发布路径、评估路径、渲染路径全部走此函数，确保三者一致。
 // 不连续状态之间的 gap 以直线连接，总长 = 各段长 + gap 长。
