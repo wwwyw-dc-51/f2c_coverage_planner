@@ -224,15 +224,15 @@ void greedyCellOrder(
     {
         const auto& c0 = swaths_by_cells[0];
         if (c0.size() == 0) {
-            // 防御性：C0 无 swath 时使用 cell 中心作为入口
-            const auto& ring = cells.getGeometry(0).getExteriorRing();
-            double cx = 0.0, cy = 0.0;
-            for (size_t pi = 0; pi + 1 < ring.size(); ++pi) {
-                cx += ring.getGeometry(pi).getX();
-                cy += ring.getGeometry(pi).getY();
+            // 防御性：C0 无 swath，从第一个非空 cell 取起点
+            cur_x = 0.0; cur_y = 0.0;
+            for (size_t fi = 1; fi < swaths_by_cells.size(); ++fi) {
+                if (swaths_by_cells[fi].size() > 0) {
+                    cur_x = swaths_by_cells[fi].at(0).startPoint().getX();
+                    cur_y = swaths_by_cells[fi].at(0).startPoint().getY();
+                    break;
+                }
             }
-            cur_x = cx / (ring.size() - 1);
-            cur_y = cy / (ring.size() - 1);
         } else {
             const auto& last_sw = c0.at(c0.size() - 1);
             cur_x = last_sw.endPoint().getX();
