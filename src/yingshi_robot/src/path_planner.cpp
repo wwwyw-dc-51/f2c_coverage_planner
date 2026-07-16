@@ -68,7 +68,10 @@ struct HoleIntersection {
     double t;
     size_t hole_idx;
     size_t edge_idx;
-    f2c::types::Point point;
+    // 交点集合会排序/去重；只存标量，避免 F2C Point 的移动赋值在
+    // std::sort/std::unique 搬移已移动对象时访问空 data_。
+    double x;
+    double y;
 };
 
 std::vector<HoleIntersection> findHoleIntersections(
@@ -104,7 +107,7 @@ std::vector<HoleIntersection> findHoleIntersections(
                 u >= -1e-8 && u <= 1.0 + 1e-8) {
                 intersections.push_back({
                     t, hole_idx, edge_idx,
-                    f2c::types::Point(sx + t * dx, sy + t * dy)});
+                    sx + t * dx, sy + t * dy});
             }
         }
     }
@@ -144,30 +147,34 @@ std::vector<f2c::types::Point> walkHoleBoundary(
     const auto& ring = hole_rings[entry.hole_idx];
     const size_t edge_count = ring.size() > 0 ? ring.size() - 1 : 0;
     if (edge_count == 0) return {};
-    if (entry.edge_idx == exit.edge_idx) return {entry.point, exit.point};
+    const f2c::types::Point entry_point(entry.x, entry.y);
+    const f2c::types::Point exit_point(exit.x, exit.y);
+    if (entry.edge_idx == exit.edge_idx) {
+        return {entry_point, exit_point};
+    }
 
     auto addVertex = [&](std::vector<f2c::types::Point>& path, size_t index) {
         path.emplace_back(
             ring.getGeometry(index).getX(), ring.getGeometry(index).getY());
     };
 
-    std::vector<f2c::types::Point> forward {entry.point};
+    std::vector<f2c::types::Point> forward {entry_point};
     size_t index = (entry.edge_idx + 1) % edge_count;
     while (true) {
         addVertex(forward, index);
         if (index == exit.edge_idx) break;
         index = (index + 1) % edge_count;
     }
-    forward.push_back(exit.point);
+    forward.push_back(exit_point);
 
-    std::vector<f2c::types::Point> backward {entry.point};
+    std::vector<f2c::types::Point> backward {entry_point};
     index = entry.edge_idx;
     while (true) {
         addVertex(backward, index);
         if (index == (exit.edge_idx + 1) % edge_count) break;
         index = (index + edge_count - 1) % edge_count;
     }
-    backward.push_back(exit.point);
+    backward.push_back(exit_point);
 
     return connectionPolylineLength(forward) <=
         connectionPolylineLength(backward) ? forward : backward;
