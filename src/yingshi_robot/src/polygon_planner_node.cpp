@@ -3339,23 +3339,23 @@ private:
                         size_t d_pts = 0, d_segs = 0;
                         const auto& poses = path_msg.poses;
                         for (size_t pi = 0; pi < poses.size(); ++pi) {
-                            if (pointInHole(poses[pi].position.x, poses[pi].position.y))
+                            if (pointInHole(poses[pi].pose.position.x, poses[pi].pose.position.y))
                                 ++d_pts;
                         }
                         const int MAX_REPORT = 5;  // 最多打印5个穿越线段
                         int reported = 0;
                         for (size_t si = 0; si + 1 < poses.size(); ++si) {
-                            if (checkSegment(poses[si].position.x, poses[si].position.y,
-                                            poses[si+1].position.x, poses[si+1].position.y)) {
+                            if (checkSegment(poses[si].pose.position.x, poses[si].pose.position.y,
+                                            poses[si+1].pose.position.x, poses[si+1].pose.position.y)) {
                                 ++d_segs;
                                 if (reported < MAX_REPORT) {
                                     RCLCPP_WARN(this->get_logger(),
                                                "  ⚠ seg[%zu]: (%.2f,%.2f) → (%.2f,%.2f)  len=%.2f m",
                                                si,
-                                               poses[si].position.x, poses[si].position.y,
-                                               poses[si+1].position.x, poses[si+1].position.y,
-                                               std::hypot(poses[si+1].position.x - poses[si].position.x,
-                                                         poses[si+1].position.y - poses[si].position.y));
+                                               poses[si].pose.position.x, poses[si].pose.position.y,
+                                               poses[si+1].pose.position.x, poses[si+1].pose.position.y,
+                                               std::hypot(poses[si+1].pose.position.x - poses[si].pose.position.x,
+                                                         poses[si+1].pose.position.y - poses[si].pose.position.y));
                                     ++reported;
                                 }
                             }
