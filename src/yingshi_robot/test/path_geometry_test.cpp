@@ -102,4 +102,49 @@ TEST(PathGeometry, PreservesEveryStateEndpointAcrossDiscontinuities)
     EXPECT_DOUBLE_EQ(points.back().getY(), 11.0);
 }
 
+// 不变量测试：materializePath 是所有路径消费者的唯一数据源。
+// 发布路径、评估路径、渲染路径全部走此函数，确保三者一致。
+TEST(PathGeometry, LengthMatchesSumOfStateLengths)
+{
+    f2c::types::Path path;
+    path.addState(
+        f2c::types::Point(0.0, 0.0), 0.0, 3.0,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+    path.addState(
+        f2c::types::Point(3.0, 0.0), std::acos(-1.0) / 2.0, 4.0,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+    path.addState(
+        f2c::types::Point(5.0, 5.0), 0.0, 2.0,  // discontinuous gap
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+
+    const auto points = yingshi::materializePath(path);
+    const double total_len = yingshi::polylineLength(points);
+
+    // 期望: 3 + 4 + 2 = 9（不含 gap，gap 由 consumer 自行连接）
+    EXPECT_DOUBLE_EQ(total_len, 9.0);
+}
+
+// 不变量测试：连续路径段之间无间隙，总长=各段长之和
+TEST(PathGeometry, ContinuousPathLengthEqualsSumOfStates)
+{
+    f2c::types::Path path;
+    path.addState(
+        f2c::types::Point(0.0, 0.0), 0.0, 5.0,
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+    path.addState(
+        f2c::types::Point(5.0, 0.0), 0.0, 3.0,  // continuous — point == previous atEnd
+        f2c::types::PathDirection::FORWARD,
+        f2c::types::PathSectionType::SWATH);
+
+    const auto points = yingshi::materializePath(path);
+    const double total_len = yingshi::polylineLength(points);
+
+    // 连续段: 第一段 (0→5) + 第二段 (5→8) = 8
+    EXPECT_DOUBLE_EQ(total_len, 8.0);
+}
+
 }  // namespace

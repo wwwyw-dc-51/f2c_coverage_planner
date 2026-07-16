@@ -144,7 +144,7 @@ public:
                         param.value_to_string().c_str());
                 }
                 
-                updateParameters();
+                updateParameters(&parameters);
                 return result;
             };
 
@@ -317,49 +317,62 @@ private:
     std::vector<rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr> decomposition_outline_pubs_;
     std::vector<rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr> infeasible_turn_pubs_;
 
-    void updateParameters()
+    void updateParameters(const std::vector<rclcpp::Parameter>* new_params = nullptr)
     {
-        // 更新参数值
-        robot_width_ = this->get_parameter("robot_width").as_double();
-        min_turning_radius_ = this->get_parameter("min_turning_radius").as_double();
-        max_diff_curv_ = this->get_parameter("max_diff_curv").as_double();
-        coverage_width_ = this->get_parameter("coverage_width").as_double();
-        path_resolution_ = this->get_parameter("path_resolution").as_double();
-        decomposition_angle_ = this->get_parameter("decomposition_angle").as_double();
-        mid_hl_width_ratio_ = this->get_parameter("mid_hl_width_ratio").as_double();
-        no_hl_width_ratio_ = this->get_parameter("no_hl_width_ratio").as_double();
-        min_hole_area_ = this->get_parameter("min_hole_area").as_double();
-        swath_endpoint_shrink_distance_ = this->get_parameter("swath_endpoint_shrink_distance").as_double();
-        min_swath_length_ = this->get_parameter("min_swath_length").as_double();
+        // 辅助 lambda：从回调参数中查找最新值，找不到则用 get_parameter（初始加载路径）
+        auto get_double = [&](const std::string& name) -> double {
+            if (new_params) for (auto& p : *new_params) if (p.get_name() == name) return p.as_double();
+            return this->get_parameter(name).as_double();
+        };
+        auto get_bool = [&](const std::string& name) -> bool {
+            if (new_params) for (auto& p : *new_params) if (p.get_name() == name) return p.as_bool();
+            return this->get_parameter(name).as_bool();
+        };
+        auto get_string = [&](const std::string& name) -> std::string {
+            if (new_params) for (auto& p : *new_params) if (p.get_name() == name) return p.as_string();
+            return this->get_parameter(name).as_string();
+        };
+        // 更新参数值（优先用回调中的新值，避免 ROS2 参数回调时序问题）
+        robot_width_ = get_double("robot_width");
+        min_turning_radius_ = get_double("min_turning_radius");
+        max_diff_curv_ = get_double("max_diff_curv");
+        coverage_width_ = get_double("coverage_width");
+        path_resolution_ = get_double("path_resolution");
+        decomposition_angle_ = get_double("decomposition_angle");
+        mid_hl_width_ratio_ = get_double("mid_hl_width_ratio");
+        no_hl_width_ratio_ = get_double("no_hl_width_ratio");
+        min_hole_area_ = get_double("min_hole_area");
+        swath_endpoint_shrink_distance_ = get_double("swath_endpoint_shrink_distance");
+        min_swath_length_ = get_double("min_swath_length");
 
         // ── 评估参数 ──
-        eval_enable_report_ = this->get_parameter("eval_enable_report").as_bool();
-        eval_grid_resolution_ = this->get_parameter("eval_grid_resolution").as_double();
-        eval_use_grid_method_ = this->get_parameter("eval_use_grid_method").as_bool();
-        eval_coverage_threshold_ = this->get_parameter("eval_coverage_threshold").as_double();
+        eval_enable_report_ = get_bool("eval_enable_report");
+        eval_grid_resolution_ = get_double("eval_grid_resolution");
+        eval_use_grid_method_ = get_bool("eval_use_grid_method");
+        eval_coverage_threshold_ = get_double("eval_coverage_threshold");
 
         // ── 优化参数 ──
-        use_optimized_planner_ = this->get_parameter("use_optimized_planner").as_bool();
-        swath_angle_optimization_ = this->get_parameter("swath_angle_optimization").as_bool();
-        swath_angle_candidates_ = this->get_parameter("swath_angle_candidates").as_string();
-        filter_tiny_cells_ = this->get_parameter("filter_tiny_cells").as_bool();
-        min_cell_area_ratio_ = this->get_parameter("min_cell_area_ratio").as_double();
-        path_simplify_enabled_ = this->get_parameter("path_simplify_enabled").as_bool();
-        path_simplify_tolerance_ = this->get_parameter("path_simplify_tolerance").as_double();
-        path_simplify_turn_threshold_ = this->get_parameter("path_simplify_turn_threshold").as_double();
-        swath_overlap_ratio_ = this->get_parameter("swath_overlap_ratio").as_double();
-        ortools_exact_solve_ = this->get_parameter("ortools_exact_solve").as_bool();
-        decomposition_angle_optimization_ = this->get_parameter("decomposition_angle_optimization").as_bool();
-        decomposition_enabled_ = this->get_parameter("decomposition_enabled").as_bool();
-        use_sweep_decomp_ = this->get_parameter("use_sweep_decomp").as_bool();
-        merge_angle_threshold_ = this->get_parameter("merge_angle_threshold").as_double();
-        swath_order_type_ = this->get_parameter("swath_order_type").as_string();
-        turn_planner_type_ = this->get_parameter("turn_planner_type").as_string();
+        use_optimized_planner_ = get_bool("use_optimized_planner");
+        swath_angle_optimization_ = get_bool("swath_angle_optimization");
+        swath_angle_candidates_ = get_string("swath_angle_candidates");
+        filter_tiny_cells_ = get_bool("filter_tiny_cells");
+        min_cell_area_ratio_ = get_double("min_cell_area_ratio");
+        path_simplify_enabled_ = get_bool("path_simplify_enabled");
+        path_simplify_tolerance_ = get_double("path_simplify_tolerance");
+        path_simplify_turn_threshold_ = get_double("path_simplify_turn_threshold");
+        swath_overlap_ratio_ = get_double("swath_overlap_ratio");
+        ortools_exact_solve_ = get_bool("ortools_exact_solve");
+        decomposition_angle_optimization_ = get_bool("decomposition_angle_optimization");
+        decomposition_enabled_ = get_bool("decomposition_enabled");
+        use_sweep_decomp_ = get_bool("use_sweep_decomp");
+        merge_angle_threshold_ = get_double("merge_angle_threshold");
+        swath_order_type_ = get_string("swath_order_type");
+        turn_planner_type_ = get_string("turn_planner_type");
 
         // ── 边界覆盖策略 ──
-        boundary_type_ = this->get_parameter("boundary_type").as_string();
-        boundary_coverage_margin_ = this->get_parameter("boundary_coverage_margin").as_double();
-        boundary_open_default_margin_ = this->get_parameter("boundary_open_default_margin").as_double();
+        boundary_type_ = get_string("boundary_type");
+        boundary_coverage_margin_ = get_double("boundary_coverage_margin");
+        boundary_open_default_margin_ = get_double("boundary_open_default_margin");
 
         // 解析角度候选列表
         swath_angle_list_.clear();
@@ -374,6 +387,24 @@ private:
                            "Invalid swath angle candidate: '%s', skipping", token.c_str());
             }
         }
+
+        // 参数合法性校验 — 拒绝零/负分辨率、非法枚举值、越界比例
+        if (eval_grid_resolution_ <= 0.0) eval_grid_resolution_ = 0.1;
+        if (coverage_width_ <= 0.0) coverage_width_ = 1.0;
+        if (robot_width_ <= 0.0) robot_width_ = 1.0;
+        if (swath_overlap_ratio_ < 0.0) swath_overlap_ratio_ = 0.0;
+        if (swath_overlap_ratio_ > 0.5) swath_overlap_ratio_ = 0.5;
+        if (merge_angle_threshold_ < 0.0) merge_angle_threshold_ = 45.0;
+        if (merge_angle_threshold_ > 90.0) merge_angle_threshold_ = 90.0;
+        const std::vector<std::string> valid_boundary = {"closed","open","custom"};
+        if (std::find(valid_boundary.begin(), valid_boundary.end(), boundary_type_) == valid_boundary.end())
+            boundary_type_ = "closed";
+        const std::vector<std::string> valid_order = {"boustrophedon","snake","spiral","none"};
+        if (std::find(valid_order.begin(), valid_order.end(), swath_order_type_) == valid_order.end())
+            swath_order_type_ = "boustrophedon";
+        const std::vector<std::string> valid_turn = {"direct","dubins","dubins_cc","reeds_shepp"};
+        if (std::find(valid_turn.begin(), valid_turn.end(), turn_planner_type_) == valid_turn.end())
+            turn_planner_type_ = "direct";
     }
 
     void publishEmptyPlanningOutputs(int index)
@@ -1986,6 +2017,7 @@ private:
                 }
                 if (swaths_by_cells.sizeTotal() == 0) {
                     RCLCPP_WARN(this->get_logger(), "No swaths; skip polygon_%d", polygon_id);
+                    clearPlanningCacheForPolygon(index, true);
                     return;
                 }
             }
@@ -3242,9 +3274,11 @@ private:
                                 si, best_span, slen, npt, sx, sy, ex, ey);
                         }
                     }
+                    // TODO: 补线目前追加到路径尾部，连接段未经 Dubins 规划。
+                    // 后续应将补线逻辑移至 genRoute 之前，使其享受完整连接规划。
                     if (fills_added > 0) {
                         RCLCPP_INFO(this->get_logger(),
-                            "  Border fill v7: %zu swath(s) added to path", fills_added);
+                            "  Border fill v7: %zu swath(s) added to path (implicit connections)", fills_added);
                     }
                 }
             }
@@ -3560,6 +3594,7 @@ private:
 
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in path planning: %s", e.what());
+            clearPlanningCacheForPolygon(index, true);
         }
     }
 };

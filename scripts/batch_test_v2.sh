@@ -69,6 +69,9 @@ echo "  F2C 7场景批量测试 v2"
 echo "  输出: $RESULT_DIR"
 echo "========================================="
 
+ERRORS=0
+COVERAGE_THRESHOLD=0.995  # 产品验收门槛 99.5%
+
 for NAME in S1 S2 S3 S4 S5 S6 notched; do
     YAML="${SCENARIOS[$NAME]}"
     echo ""
@@ -88,6 +91,7 @@ for NAME in S1 S2 S3 S4 S5 S6 notched; do
     if ! kill -0 $PLANNER_PID 2>/dev/null; then
         echo "  ERROR: planner crashed"
         cat "$LOG_FILE" | tail -5
+        ERRORS=$((ERRORS + 1))
         continue
     fi
 
@@ -255,6 +259,12 @@ PYTEST
     wait $PLANNER_PID 2>/dev/null || true
 
     echo "  $NAME done."
+
+    # 检查数据文件是否生成（崩溃/超时会缺文件）
+    if [ ! -f "$RESULT_DIR/${NAME}_data.json" ]; then
+        echo "  ERROR: $NAME data file missing — test failed"
+        ERRORS=$((ERRORS + 1))
+    fi
 done
 
 echo ""
@@ -327,3 +337,11 @@ PYREPORT
 
 echo ""
 echo "Done! Report: $RESULT_DIR"
+
+# 退出码：有错误或覆盖低于门槛则非零
+if [ $ERRORS -gt 0 ]; then
+    echo "❌ $ERRORS scenario(s) failed (crash/timeout/missing data)"
+    exit 1
+fi
+echo "✅ All 7 scenarios passed, no failures."
+exit 0
