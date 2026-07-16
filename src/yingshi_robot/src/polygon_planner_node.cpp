@@ -2513,7 +2513,7 @@ private:
 
             // ── 边界补刀恢复：fillBoundaryGaps 生成的边界线可能被 genRoute 丢弃 ──
             // 此处直接向 route 追加边界填充 swath，保证出发侧和到达侧边缘覆盖。
-            // 碰撞安全由路径级裁剪保证，此处偏移仍用 cov_width/2。
+            // 此处偏移仍用 cov_width/2，仅表达覆盖宽度，不代表机器人外形碰撞安全。
             {
                 const auto& outer_ring = cell.getExteriorRing();
                 if (outer_ring.size() >= 4 && swaths_by_cells.size() > 0) {
@@ -3165,14 +3165,14 @@ private:
                 has_last_pose = true;
             }
 
-            // ── 边界补线 v7：基于路径段的覆盖检测 ──
+            // ── 边界补线 v7 校验：基于最终路径段检查 route/path 一致性 ──
             // v6 用点距离+跨度判断，在窄走廊会被转弯误判（转弯全线经过填充位置）。
             // v7 改为段级检测：找 path 中与 swath 同向的长连续段。
             // 仅当存在足够长的连续对齐段时才判定为"已覆盖"。
             {
-                if (swaths.size() > 0 && path_pre_rdp.size() >= 2) {
+                const auto path_pre_rdp_points = yingshi::materializePath(path_pre_rdp);
+                if (swaths.size() > 0 && path_pre_rdp_points.size() >= 2) {
                     double half_w = coverage_width_ * 0.5;
-                    size_t fills_added = 0;
 
                     for (size_t si = 0; si < swaths.size(); ++si) {
                         const auto& sw = swaths.at(si);
@@ -3190,11 +3190,11 @@ private:
                         double best_along_min = 1e9, best_along_max = -1e9;
                         double cur_along_min = 1e9, cur_along_max = -1e9;
 
-                        for (size_t pi = 0; pi + 1 < path_pre_rdp.size(); ++pi) {
-                            auto& st0 = path_pre_rdp.getState(pi);
-                            auto& st1 = path_pre_rdp.getState(pi + 1);
-                            double p0x = st0.point.getX(), p0y = st0.point.getY();
-                            double p1x = st1.point.getX(), p1y = st1.point.getY();
+                        for (size_t pi = 0; pi + 1 < path_pre_rdp_points.size(); ++pi) {
+                            const auto& p0 = path_pre_rdp_points[pi];
+                            const auto& p1 = path_pre_rdp_points[pi + 1];
+                            double p0x = p0.getX(), p0y = p0.getY();
+                            double p1x = p1.getX(), p1y = p1.getY();
 
                             // 段中点
                             double mx = (p0x + p1x) * 0.5, my = (p0y + p1y) * 0.5;
@@ -3252,33 +3252,13 @@ private:
                         bool covered = (best_span >= slen * 0.5);  // 50% 即可，段级检测已过滤转弯
 
                         if (!covered) {
-                            int npt = std::max(2, static_cast<int>(slen / path_resolution_));
-                            double yaw = std::atan2(ey - sy, ex - sx);
-                            for (int pi = 0; pi < npt; ++pi) {
-                                double t = static_cast<double>(pi) / (npt - 1);
-                                double px = sx + t*(ex-sx), py = sy + t*(ey-sy);
-                                f2c::types::PathState ps;
-                                ps.point = f2c::types::Point(px, py);
-                                ps.angle = yaw;
-                                ps.len = (pi + 1 < npt) ? (slen / (npt - 1)) : 0.0;
-                                ps.dir = f2c::types::PathDirection::FORWARD;
-                                ps.type = f2c::types::PathSectionType::SWATH;
-                                ps.velocity = 1.0;
-                                path_pre_rdp.addState(ps);
-                                path.addState(ps);
-                            }
-                            ++fills_added;
-                            RCLCPP_INFO(this->get_logger(),
+                            // 规划完成后禁止直接追加补线：否则会生成未经掉头规划的隐式连接。
+                            // 边界线必须在 route 阶段恢复；这里仅报告规划不变量被破坏。
+                            RCLCPP_ERROR(this->get_logger(),
                                 "  Border fill v7: swath[%zu] uncovered (best_span=%.2f/%.2f), "
-                                "added %d pts [(%.2f,%.2f)->(%.2f,%.2f)]",
-                                si, best_span, slen, npt, sx, sy, ex, ey);
+                                "route/path mismatch [(%.2f,%.2f)->(%.2f,%.2f)]",
+                                si, best_span, slen, sx, sy, ex, ey);
                         }
-                    }
-                    // TODO: 补线目前追加到路径尾部，连接段未经 Dubins 规划。
-                    // 后续应将补线逻辑移至 genRoute 之前，使其享受完整连接规划。
-                    if (fills_added > 0) {
-                        RCLCPP_INFO(this->get_logger(),
-                            "  Border fill v7: %zu swath(s) added to path (implicit connections)", fills_added);
                     }
                 }
             }
