@@ -15,6 +15,51 @@ f2c::types::Swath makeSwath(
     return f2c::types::Swath(line, width);
 }
 
+f2c::types::Cell makeRectangle(
+    double min_x, double min_y, double max_x, double max_y)
+{
+    return f2c::types::Cell(yingshi::makeClosedRing({
+        f2c::types::Point(min_x, min_y),
+        f2c::types::Point(max_x, min_y),
+        f2c::types::Point(max_x, max_y),
+        f2c::types::Point(min_x, max_y),
+    }));
+}
+
+double swathMidY(const f2c::types::Swath& swath)
+{
+    return 0.5 * (
+        swath.startPoint().getY() + swath.endPoint().getY());
+}
+
+TEST(BoundaryFill, InsertsAnEndSideFillWhenThereIsNoStartSideFill)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto top_cell = makeRectangle(0.0, 8.1, 10.0, 10.0);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 8.5, 9.85, 8.5, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, top_cell, full_polygon, 0.0, 0.90, 0.0);
+
+    ASSERT_EQ(swaths.size(), 2U);
+    EXPECT_NEAR(swathMidY(swaths.at(1)), 9.55, 1e-9);
+}
+
+TEST(BoundaryFill, FillsAnInternalCellSeamBeyondHalfCoverageWidth)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto middle_cell = makeRectangle(0.0, 4.0, 10.0, 6.0);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 4.4, 9.85, 4.4, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, middle_cell, full_polygon, 0.0, 0.90, 0.0);
+
+    ASSERT_EQ(swaths.size(), 2U);
+    EXPECT_NEAR(swathMidY(swaths.at(1)), 6.0, 1e-9);
+}
+
 TEST(RouteInvariant, AppendedBoundarySwathStartsANewConnectedGroup)
 {
     f2c::types::Route route;

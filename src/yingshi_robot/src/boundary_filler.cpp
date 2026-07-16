@@ -219,7 +219,7 @@ void fillBoundaryGaps(
         }
 
         // 出发侧插入最前，到达侧追加末尾
-        if (!start_fills.empty()) {
+        if (!start_fills.empty() || !end_fills.empty()) {
             f2c::types::Swaths reordered;
             for (auto& sf : start_fills) reordered.push_back(sf);
             for (size_t si = 0; si < cell_swaths.size(); ++si)
@@ -227,6 +227,150 @@ void fillBoundaryGaps(
             for (auto& ef : end_fills) reordered.push_back(ef);
             cell_swaths = reordered;
         }
+    }
+
+    // ═══════════════════════════════════════════════════
+    // Cell 内部接缝补刀
+    // ═══════════════════════════════════════════════════
+    // 分解后的相邻 cell 会独立生成 swath，法向相位可能不一致。
+    // 这里只处理仍位于目标区域内部的严格平行接缝；物理外边界和孔洞
+    // 边界继续由上面的专用逻辑负责。
+    struct SeamInterval {
+        double projection;
+        double along_min;
+        double along_max;
+    };
+    std::vector<SeamInterval> seam_intervals;
+
+    auto pointInTargetArea = [&](double x, double y) {
+        if (!pointInPolygon(x, y, poly_ring)) return false;
+        for (size_t hi = 0; hi + 1 < full_polygon.size(); ++hi) {
+            if (pointInPolygon(
+                    x, y, full_polygon.getInteriorRing(hi))) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    double current_proj_min = std::numeric_limits<double>::max();
+    double current_proj_max = -std::numeric_limits<double>::max();
+    for (size_t si = 0; si < cell_swaths.size(); ++si) {
+        const double cx = 0.5 * (
+            cell_swaths.at(si).startPoint().getX() +
+            cell_swaths.at(si).endPoint().getX());
+        const double cy = 0.5 * (
+            cell_swaths.at(si).startPoint().getY() +
+            cell_swaths.at(si).endPoint().getY());
+        const double projection = cx * (-s_dy) + cy * s_dx;
+        current_proj_min = std::min(current_proj_min, projection);
+        current_proj_max = std::max(current_proj_max, projection);
+    }
+
+    const double sample_step = std::min(0.05, cov_width * 0.1);
+    for (size_t ci = 0; ci + 1 < cell_ring.size(); ++ci) {
+        const double x1 = cell_ring.getGeometry(ci).getX();
+        const double y1 = cell_ring.getGeometry(ci).getY();
+        const double x2 = cell_ring.getGeometry(ci + 1).getX();
+        const double y2 = cell_ring.getGeometry(ci + 1).getY();
+        const double edge_dx = x2 - x1;
+        const double edge_dy = y2 - y1;
+        const double edge_len = std::hypot(edge_dx, edge_dy);
+        if (edge_len < cov_width * 0.5) continue;
+
+        // 接缝补线不能改变斜边几何，只接受近乎严格平行的分解边。
+        const double parallel =
+            std::abs(edge_dx * s_dx + edge_dy * s_dy) / edge_len;
+        if (parallel < 0.999) continue;
+
+        double inward_x = -edge_dy / edge_len;
+        double inward_y = edge_dx / edge_len;
+        const double mid_x = 0.5 * (x1 + x2);
+        const double mid_y = 0.5 * (y1 + y2);
+        if (inward_x * (cell_cx - mid_x) +
+            inward_y * (cell_cy - mid_y) < 0.0) {
+            inward_x = -inward_x;
+            inward_y = -inward_y;
+        }
+
+        // 跨过该边仍在目标区域内，才是分解接缝。
+        if (!pointInTargetArea(
+                mid_x - inward_x * sample_step,
+                mid_y - inward_y * sample_step)) {
+            continue;
+        }
+
+        const double projection = mid_x * (-s_dy) + mid_y * s_dx;
+        double nearest = std::numeric_limits<double>::max();
+        for (size_t si = 0; si < cell_swaths.size(); ++si) {
+            const double sx = 0.5 * (
+                cell_swaths.at(si).startPoint().getX() +
+                cell_swaths.at(si).endPoint().getX());
+            const double sy = 0.5 * (
+                cell_swaths.at(si).startPoint().getY() +
+                cell_swaths.at(si).endPoint().getY());
+            nearest = std::min(
+                nearest,
+                std::abs(projection - (sx * (-s_dy) + sy * s_dx)));
+        }
+        if (nearest <= boundary_offset + 1e-6) continue;
+
+        const double along_1 = x1 * s_dx + y1 * s_dy;
+        const double along_2 = x2 * s_dx + y2 * s_dy;
+        const double along_min = std::min(along_1, along_2);
+        const double along_max = std::max(along_1, along_2);
+
+        bool merged = false;
+        for (auto& interval : seam_intervals) {
+            if (std::abs(interval.projection - projection) <= 1e-6 &&
+                along_min <= interval.along_max + 1e-6 &&
+                along_max >= interval.along_min - 1e-6) {
+                interval.along_min = std::min(interval.along_min, along_min);
+                interval.along_max = std::max(interval.along_max, along_max);
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            seam_intervals.push_back({projection, along_min, along_max});
+        }
+    }
+
+    if (!seam_intervals.empty()) {
+        f2c::types::Swaths seam_start_fills;
+        f2c::types::Swaths seam_end_fills;
+        for (const auto& interval : seam_intervals) {
+            f2c::types::LineString line;
+            line.addPoint(f2c::types::Point(
+                s_dx * interval.along_min - s_dy * interval.projection,
+                s_dy * interval.along_min + s_dx * interval.projection));
+            line.addPoint(f2c::types::Point(
+                s_dx * interval.along_max - s_dy * interval.projection,
+                s_dy * interval.along_max + s_dx * interval.projection));
+            f2c::types::Swath fill(line, cov_width);
+
+            const double distance_to_start =
+                std::abs(interval.projection - current_proj_min);
+            const double distance_to_end =
+                std::abs(interval.projection - current_proj_max);
+            if (distance_to_start < distance_to_end) {
+                seam_start_fills.push_back(fill);
+            } else {
+                seam_end_fills.push_back(fill);
+            }
+        }
+
+        f2c::types::Swaths reordered;
+        for (size_t i = 0; i < seam_start_fills.size(); ++i) {
+            reordered.push_back(seam_start_fills.at(i));
+        }
+        for (size_t i = 0; i < cell_swaths.size(); ++i) {
+            reordered.push_back(cell_swaths.at(i));
+        }
+        for (size_t i = 0; i < seam_end_fills.size(); ++i) {
+            reordered.push_back(seam_end_fills.at(i));
+        }
+        cell_swaths = reordered;
     }
 
     // ═══════════════════════════════════════════════════
