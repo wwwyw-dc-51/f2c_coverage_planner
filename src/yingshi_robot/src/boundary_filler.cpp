@@ -86,9 +86,9 @@ void fillBoundaryGaps(
     if (cell_ring.size() < 3) return;
     const auto& poly_ring = full_polygon.getExteriorRing();
 
-    // 碰撞安全: 补线偏移用 robot_half_width，确保机器人不越界
-    // 未提供时回退到 cov_width/2（兼容旧调用）
-    double boundary_offset = (robot_half_width > 0.0) ? robot_half_width : (cov_width * 0.5);
+    // 碰撞安全通过最终路径裁剪保证，补线偏移仍用 cov_width/2 维持覆盖率
+    double boundary_offset = cov_width * 0.5;
+    (void)robot_half_width;  // 保留接口兼容性，碰撞由路径级裁剪处理
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
