@@ -109,7 +109,7 @@ CoverageGate = ((coverage - 0.90) / 0.09)³   // 钳制到 [0, 1]
 |------|----------|
 | 区域分解 | Sweep 扫描线分解 |
 | 条带排序 | Boustrophedon (来回扫描) |
-| 掉头规划 | Direct 选项（当前 connection 仍会进入 F2C 简化，待修） |
+| 掉头规划 | Direct Route 折线（控制点保真；待 VM 验证） |
 | TSP 路由 | OR-Tools genRoute |
 | 路径简化 | RDP (Ramer-Douglas-Peucker) |
 | 覆盖评估 | 网格采样法 |
@@ -121,9 +121,9 @@ CoverageGate = ((coverage - 0.90) / 0.09)³   // 钳制到 [0, 1]
 
 | 问题 | 优先级 | 方案 |
 |------|:--:|------|
-| Route 边界补线插入顺序错误，产生跨区/越界长连接 | P0 | 使用 `addConnectedSwaths`，保证 connection 位于新 group 之前 |
-| route waypoint 绕行折线被 `simplifyConnection` 拉成弦线 | P0 | direct 模式保留控制点；弦线替换前做可行域验证 |
-| 孔洞交叉诊断未闭环，S3/S6/notched 产生误报 | P1 | 统一闭环构造 hole ring，并增加点包含测试 |
+| Route 边界补线插入顺序错误，产生跨区/越界长连接 | P0 | 本地已修 `59d6418`；待 VM 场景验证 |
+| route waypoint 绕行折线被 `simplifyConnection` 拉成弦线 | P0 | 本地已修 `15aa918`；direct 保留全部 Route 控制点并跳过 RDP，待 VM 验证 |
+| 孔洞交叉诊断未闭环，S3/S6/notched 产生误报 | P1 | 本地已修 `548070e`；统一闭环构造及点包含测试，待 VM 验证 |
 | 候选清洁宽度 0.90 m 尚未做连续清洁痕迹验证 | P1 | 实测有效连续清洁带后再冻结产品参数 |
 
 ---

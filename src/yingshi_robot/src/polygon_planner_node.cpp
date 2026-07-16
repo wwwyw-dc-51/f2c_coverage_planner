@@ -83,7 +83,7 @@ private:
     bool use_sweep_decomp_;           // ★ 扫描线分解：仅水平切分，孔洞→条带(7cells)而非网格(42cells)
     double merge_angle_threshold_;    // cell 合并角度阈值（度），默认45°
     std::string swath_order_type_;    // swath 排序算法：boustrophedon | snake | spiral | none
-    std::string turn_planner_type_;   // 掉头规划器："dubins"/"reeds_shepp"/"auto"
+    std::string turn_planner_type_;   // "direct"/"dubins"/"dubins_cc"/"reeds_shepp"
 
     // ── 边界覆盖策略（统一闭合/开放边界） ──
     std::string boundary_type_;        // "closed"/"open"/"custom" — 边界语义预设

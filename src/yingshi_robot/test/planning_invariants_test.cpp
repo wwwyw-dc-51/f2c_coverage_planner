@@ -44,29 +44,32 @@ TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)
     first_group.push_back(makeSwath(0.0, 0.0, 1.0, 0.0));
     route.addConnectedSwaths(f2c::types::MultiPoint(), first_group);
 
-    f2c::types::MultiPoint l_connection;
-    l_connection.addPoint(f2c::types::Point(1.0, 0.0));
-    l_connection.addPoint(f2c::types::Point(1.0, 2.0));
-    l_connection.addPoint(f2c::types::Point(2.0, 2.0));
+    f2c::types::MultiPoint detour_connection;
+    detour_connection.addPoint(f2c::types::Point(1.0, 0.0));
+    detour_connection.addPoint(f2c::types::Point(1.0, 2.0));
+    detour_connection.addPoint(f2c::types::Point(2.0, 2.0));
+    detour_connection.addPoint(f2c::types::Point(2.0, 3.0));
     yingshi::appendConnectedSwath(
-        route, l_connection, makeSwath(2.0, 2.0, 3.0, 2.0));
+        route, detour_connection, makeSwath(2.0, 3.0, 3.0, 3.0));
 
     const auto path = yingshi::planDirectPath(route, 1.0);
     const auto points = yingshi::materializePath(path);
 
-    ASSERT_EQ(path.size(), 4U);
+    ASSERT_EQ(path.size(), 5U);
     EXPECT_EQ(path[0].type, f2c::types::PathSectionType::SWATH);
     EXPECT_EQ(path[1].type, f2c::types::PathSectionType::TURN);
     EXPECT_EQ(path[2].type, f2c::types::PathSectionType::TURN);
-    EXPECT_EQ(path[3].type, f2c::types::PathSectionType::SWATH);
-    ASSERT_EQ(points.size(), 5U);
+    EXPECT_EQ(path[3].type, f2c::types::PathSectionType::TURN);
+    EXPECT_EQ(path[4].type, f2c::types::PathSectionType::SWATH);
+    ASSERT_EQ(points.size(), 6U);
     EXPECT_DOUBLE_EQ(points[0].getX(), 0.0);
     EXPECT_DOUBLE_EQ(points[1].getX(), 1.0);
     EXPECT_DOUBLE_EQ(points[2].getX(), 1.0);
     EXPECT_DOUBLE_EQ(points[2].getY(), 2.0);
     EXPECT_DOUBLE_EQ(points[3].getX(), 2.0);
-    EXPECT_DOUBLE_EQ(points[4].getX(), 3.0);
-    EXPECT_DOUBLE_EQ(yingshi::polylineLength(points), 5.0);
+    EXPECT_DOUBLE_EQ(points[4].getY(), 3.0);
+    EXPECT_DOUBLE_EQ(points[5].getX(), 3.0);
+    EXPECT_DOUBLE_EQ(yingshi::polylineLength(points), 6.0);
 }
 
 TEST(HoleGeometry, BuildsAClosedRingFromUnclosedVertices)
