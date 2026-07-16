@@ -2586,19 +2586,16 @@ private:
                             bline.addPoint(f2c::types::Point(bx1, by1));
                             bline.addPoint(f2c::types::Point(bx2, by2));
                             f2c::types::Swath bsw(bline, coverage_width_);
-                            route.addSwath(bsw);
-                            // 添加连接：从前一 swath 终点到边界填充起点
-                            // 需要至少 2 点，否则 F2C getInAngle() 会抛异常
-                            if (route.sizeVectorSwaths() > 1) {
+                            // F2C Route 的 connection[i] 位于 swaths[i] 之前。
+                            // 必须先取旧 route 尾点，再一次性追加 connection + 新 group；
+                            // addSwath() 后补 addConnection() 会把补线并入旧 group。
+                            if (route.sizeVectorSwaths() > 0 &&
+                                route.getLastSwaths().size() > 0) {
                                 f2c::types::MultiPoint conn;
-                                // 前一 swath 的终点
-                                auto& prev_swaths = route.getSwaths(route.sizeVectorSwaths() - 2);
-                                if (prev_swaths.size() > 0) {
-                                    auto& last_sw = prev_swaths.at(prev_swaths.size() - 1);
-                                    conn.addPoint(last_sw.endPoint());
-                                    conn.addPoint(f2c::types::Point(bx1, by1));
-                                    route.addConnection(conn);
-                                }
+                                const auto& last_sw = route.getLastSwaths().back();
+                                conn.addPoint(last_sw.endPoint());
+                                conn.addPoint(bsw.startPoint());
+                                yingshi::appendConnectedSwath(route, conn, bsw);
                             }
                             RCLCPP_INFO(this->get_logger(),
                                 "  Border fill restored: edge[%.1f,%.1f]→[%.1f,%.1f] proj=%.2f",

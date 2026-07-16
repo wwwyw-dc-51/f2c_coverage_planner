@@ -72,6 +72,18 @@ if(BUILD_TESTING)
   target_include_directories(decomposer_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
+
+  ament_add_gtest(planning_invariants_test
+    test/planning_invariants_test.cpp
+    src/path_planner.cpp
+    src/boundary_filler.cpp
+  )
+  target_link_libraries(planning_invariants_test
+    Fields2Cover::Fields2Cover
+  )
+  target_include_directories(planning_invariants_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 install(TARGETS

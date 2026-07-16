@@ -14,6 +14,16 @@
 
 namespace yingshi {
 
+void appendConnectedSwath(
+    f2c::types::Route& route,
+    const f2c::types::MultiPoint& connection,
+    const f2c::types::Swath& swath)
+{
+    f2c::types::Swaths group;
+    group.push_back(swath);
+    route.addConnectedSwaths(connection, group);
+}
+
 // ========== RDP 路径简化（分段感知版）==========
 // Ramer-Douglas-Peucker 算法，剔除共线或近似共线的冗余路径点
 //

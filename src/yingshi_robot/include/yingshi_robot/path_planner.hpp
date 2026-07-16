@@ -8,6 +8,13 @@ namespace yingshi {
 // ========== 路径规划模块 ==========
 // 负责：RDP 路径简化、TSP 路由规划、路径后处理
 
+// 将一条 swath 作为独立 group 追加，并把 connection 放在该 group 之前。
+// 禁止用 addSwath() 后补 addConnection()，否则 F2C 会把 swath 合并进旧 group。
+void appendConnectedSwath(
+    f2c::types::Route& route,
+    const f2c::types::MultiPoint& connection,
+    const f2c::types::Swath& swath);
+
 // RDP (Ramer-Douglas-Peucker) 路径简化（分段感知版）
 // 先检测转弯点（方向突变标记为段边界），再逐段执行 RDP
 // epsilon: 简化容差 (m)
