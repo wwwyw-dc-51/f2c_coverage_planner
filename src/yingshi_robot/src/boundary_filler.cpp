@@ -86,9 +86,9 @@ void fillBoundaryGaps(
     if (cell_ring.size() < 3) return;
     const auto& poly_ring = full_polygon.getExteriorRing();
 
-    // 碰撞安全通过最终路径裁剪保证，补线偏移仍用 cov_width/2 维持覆盖率
+    // 此偏移只保证覆盖工具贴边；机器人外形净空需要单独校验。
     double boundary_offset = cov_width * 0.5;
-    (void)robot_half_width;  // 保留接口兼容性，碰撞由路径级裁剪处理
+    (void)robot_half_width;  // 保留接口兼容性，当前不参与边界补线偏移。
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
@@ -170,7 +170,7 @@ void fillBoundaryGaps(
                 n_x = -n_x; n_y = -n_y;
             }
 
-            // 边界 swath：多边形边向内偏移 boundary_offset（robot_half_width）
+            // 边界 swath：按覆盖宽度的一半向多边形内部偏移。
             f2c::types::LineString bline;
             bline.addPoint(f2c::types::Point(px1 + boundary_offset * n_x, py1 + boundary_offset * n_y));
             bline.addPoint(f2c::types::Point(px2 + boundary_offset * n_x, py2 + boundary_offset * n_y));
