@@ -175,9 +175,9 @@ for i in range(120):
 # 解析结果
 result = {}
 if eval_found:
-    def extract(pat, text, cast=float):
+    def extract(pat, text, cast=float, flags=0):
         # 多 cell 场景会输出多组评估，取最后一组（最终汇总）
-        matches = re.findall(pat, text)
+        matches = re.findall(pat, text, flags=flags)
         if matches:
             val = matches[-1]
             return cast(val) if cast != int else int(val)
@@ -193,7 +193,8 @@ if eval_found:
         'uncovered_area': extract(r'未覆盖面积[:\s]*([\d.]+)', text),
         'total_distance': extract(r'路径总长[:\s]*([\d.]+)', text),
         'work_ratio': extract(r'有效工作比[:\s]*([\d.]+)%', text),
-        'turn_count': extract(r'转弯次数[:\s]*(\d+)', text, int),
+        # 用 $ 锚定行尾整数，排除评分行的 "转弯次数: 5.678/15"
+        'turn_count': extract(r'^转弯次数:\s*(\d+)\s*$', text, int, re.MULTILINE),
         'overlap_rate': extract(r'重叠率[:\s]*([\d.]+)%', text),
         'planning_time_ms': extract(r'规划耗时[:\s]*([\d.]+)\s*ms', text),
     }

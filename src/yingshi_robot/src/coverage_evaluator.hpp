@@ -270,21 +270,24 @@ inline std::pair<double, double> computeCurvature(const f2c::types::Path& path) 
 // 4. 覆盖率计算
 // ============================================================================
 
-/// 网格法：精确计算覆盖率
+/// 网格法：精确计算覆盖率和重叠率
 /// @param path 规划路径
 /// @param target_cells 目标区域（含孔洞的外环信息）
 /// @param hole_rings 孔洞环列表（用于点包含测试）
 /// @param params 评估参数
+/// @param out_overlap_rate [out] 基于路径扫掠的真实重叠率（可选）
 /// @return {covered_area, coverage_rate}
 /// @note 包含 Y 轴预过滤优化：每行网格点只检查 y-range 覆盖该行的路径段，
 ///       将 O(G×P) 降为 O(G×P_filtered)，对大面积+长路径场景加速 20-50x
+///       逐格元访问计数用于计算路径级重叠率（非 swath 几何估算）
 inline std::pair<double, double> computeCoverageGrid(
     const f2c::types::Path& path,
     const f2c::types::Cells& target_cells,
     const std::vector<f2c::types::LinearRing>& hole_rings,
     const EvalParams& params,
     std::vector<std::pair<double,double>>* out_covered = nullptr,
-    std::vector<std::pair<double,double>>* out_uncovered = nullptr)
+    std::vector<std::pair<double,double>>* out_uncovered = nullptr,
+    double* out_overlap_rate = nullptr)
 {
     double res = params.grid_resolution;
     double half_cov = params.coverage_width / 2.0;
@@ -319,9 +322,12 @@ inline std::pair<double, double> computeCoverageGrid(
         seg_max_y[pi] = std::max(y1, y2) + half_cov;
     }
 
-    // 3. 栅格化遍历（带 Y 轴预过滤）
+    // 3. 栅格化遍历（带 Y 轴预过滤 + 连续段聚合成 pass）
+    // 不能直接统计命中网格的 segment 数：相邻碎段会把同一趟经过重复计数。
+    // 正确做法：将连续覆盖段聚合为一次 pass，同一次 pass 内的多个段只算一次。
     int target_count = 0;
     int covered_count = 0;
+    int total_passes = 0;  // 所有格元的 pass 次数之和，用于重叠率
 
     double gy_start = min_y + res / 2.0;
     int total_x_steps = static_cast<int>((max_x - min_x) / res) + 1;
@@ -349,19 +355,31 @@ inline std::pair<double, double> computeCoverageGrid(
             if (!in_target) continue;
             ++target_count;
 
-            // b) 检查是否被路径覆盖（仅检查 y-range 覆盖当前 gy 的段）
-            bool covered = false;
-            for (size_t pi = 0; pi < path_seg_count && !covered; ++pi) {
-                if (gy < seg_min_y[pi] || gy > seg_max_y[pi]) continue;  // Y 轴预过滤
+            // b) 统计该格元被路径扫过的次数（连续段聚合，避免碎段重复计数）
+            int passes = 0;
+            bool in_pass = false;
+            for (size_t pi = 0; pi < path_seg_count; ++pi) {
+                if (gy < seg_min_y[pi] || gy > seg_max_y[pi]) {
+                    in_pass = false;  // Y 轴预过滤：段完全覆盖不到该行，断开 pass
+                    continue;
+                }
                 double dist = pointToSegmentDist(
                     f2c::types::Point(gx, gy),
                     path_points[pi],
                     path_points[pi + 1]
                 );
-                if (dist <= half_cov) covered = true;
+                if (dist <= half_cov) {
+                    if (!in_pass) {
+                        ++passes;
+                        in_pass = true;
+                    }
+                } else {
+                    in_pass = false;
+                }
             }
-            if (covered) {
+            if (passes > 0) {
                 ++covered_count;
+                total_passes += passes;
                 if (out_covered) out_covered->push_back({gx, gy});
             } else {
                 if (out_uncovered) out_uncovered->push_back({gx, gy});
@@ -382,6 +400,14 @@ inline std::pair<double, double> computeCoverageGrid(
 
     double covered_area = covered_count * res * res;
     double rate = static_cast<double>(covered_count) / target_count;
+
+    // 基于最终路径扫掠的重叠率：(总 pass 次数 - 被覆盖格元数) / 目标格元总数
+    if (out_overlap_rate) {
+        *out_overlap_rate = (target_count > 0)
+            ? std::max(0.0, static_cast<double>(total_passes - covered_count) / target_count)
+            : 0.0;
+    }
+
     return {covered_area, rate};
 }
 
@@ -436,13 +462,15 @@ inline EvalResult evaluatePlan(
     }
 
     // ── 覆盖率 ──
+    bool grid_overlap_ready = false;  // 网格模式已在 computeCoverageGrid 中算好重叠率
     if (params.use_grid_method) {
         r.coverage_method = "grid";
         r.grid_resolution = params.grid_resolution;
         auto [covered_area, rate] = computeCoverageGrid(path, target_cells, hole_rings, params,
-            &r.covered_grid, &r.uncovered_grid);
+            &r.covered_grid, &r.uncovered_grid, &r.overlap_rate);
         r.covered_area = covered_area;
         r.coverage_rate = rate;
+        grid_overlap_ready = true;
     } else {
         r.coverage_method = "geometric";
         double effective_width = params.coverage_width * (1.0 - params.swath_overlap_ratio);
@@ -467,15 +495,16 @@ inline EvalResult evaluatePlan(
     r.turn_count = countTurns(
         path, params.turn_angle_threshold, params.turn_merge_distance);
 
-    // ── 重叠率（几何估算，扣除预期重叠） ──
-    // 预期重叠来自 swath_overlap_ratio 参数（人为设的重叠不应扣分）
-    // 只罚"意外重叠"：ideal - expect_overlap 之外的
-    if (r.net_area > 0.0) {
-        double effective_width = params.coverage_width * (1.0 - params.swath_overlap_ratio);
-        double expected_coverage = r.swath_total_dist * effective_width;
-        r.overlap_rate = std::max(0.0, (expected_coverage - r.net_area) / r.net_area);
+    // ── 重叠率 ──
+    // 网格法：基于最终路径扫掠的逐格元访问计数（真实重叠，无估算）
+    // 几何法：swath 总长 × 有效间距 vs 净面积（近似，不读最终路径）
+    if (!grid_overlap_ready) {
+        if (r.net_area > 0.0) {
+            double effective_width = params.coverage_width * (1.0 - params.swath_overlap_ratio);
+            double expected_coverage = r.swath_total_dist * effective_width;
+            r.overlap_rate = std::max(0.0, (expected_coverage - r.net_area) / r.net_area);
+        }
     }
-
     // ── 曲率 ──
     auto [avg_curv, max_curv] = computeCurvature(path);
     r.avg_curvature = avg_curv;
