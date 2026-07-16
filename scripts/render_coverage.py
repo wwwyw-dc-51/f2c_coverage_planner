@@ -169,13 +169,13 @@ def render_cells(scenario_name, outer, holes, cells_data, output_png):
 
 
 def render_connections(scenario_name, outer, holes, cells_data, connections_data, output_png):
-    """Cell 间连接图：cell 边界 + 起止点 + 连接线"""
+    """Cell 间 route 控制点图：cell 边界 + 起止点 + 连接控制线。"""
     import matplotlib.cm as cm
     import numpy as np
     from matplotlib.patches import Polygon as MPolygon
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-    ax.set_title(f'{scenario_name} - Cell Connections', fontsize=12)
+    ax.set_title(f'{scenario_name} - Cell Route Waypoints', fontsize=12)
 
     # 外边界 + 孔洞
     poly = MPolygon(outer, fill=True, facecolor='lightyellow', edgecolor='black', linewidth=2)
@@ -205,7 +205,7 @@ def render_connections(scenario_name, outer, holes, cells_data, connections_data
             ax.plot(cell['exit']['x'], cell['exit']['y'], 's', color='red',
                     markersize=10, markeredgewidth=1.5, markeredgecolor='darkred', zorder=5)
 
-    # Cell 间连接线（绘制 route 实际路径）
+    # Cell 间 route 控制线；最终可执行曲线以 coverage 图中的 path 为准。
     for conn in connections_data:
         path = conn.get('path', [])
         if len(path) >= 2:
@@ -231,7 +231,7 @@ def render_connections(scenario_name, outer, holes, cells_data, connections_data
 
     ax.set_aspect('equal')
     ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
-    ax.text(0.02, 0.98, f'Cells: {len(cells_data)} | Connections: {len(connections_data)} | ○ entry  ■ exit',
+    ax.text(0.02, 0.98, f'Cells: {len(cells_data)} | Route links: {len(connections_data)} | ○ entry  ■ exit',
             transform=ax.transAxes, fontsize=9, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     plt.tight_layout()
@@ -272,4 +272,3 @@ if __name__ == '__main__':
         render_connections(name, outer, holes, cells_data, connections_data, sys.argv[4])
     else:
         render(name, outer, holes, path_pts, eval_r, sys.argv[4], grid_json)
-

@@ -228,17 +228,19 @@ print(f'  {name}: cov={cov:.2f}% score={score:.1f} path_pts={len(full_path)}')
 # 从 vis JSON 读取 cells + connections
 vis_cells = []
 vis_connections = []
+vis_swaths = []
 if os.path.exists(vis_json):
     try:
         with open(vis_json) as vf:
             vd = json.load(vf)
         vis_cells = vd.get('cells', [])
         vis_connections = vd.get('connections', [])
+        vis_swaths = vd.get('swaths', [])
     except Exception as e:
         print(f'  WARNING: cells JSON read failed: {e}')
 
 # 保存数据
-merged = {'scenario': name, 'path': full_path, 'swaths': [], 'eval': result,
+merged = {'scenario': name, 'path': full_path, 'swaths': vis_swaths, 'eval': result,
           'cells': vis_cells, 'connections': vis_connections}
 data_file = f'{result_dir}/{name}_data.json'
 with open(data_file, 'w') as f:

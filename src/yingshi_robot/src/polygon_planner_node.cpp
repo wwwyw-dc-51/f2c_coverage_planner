@@ -3465,6 +3465,17 @@ private:
                             if (pi + 1 < published_path_points.size()) vf << ",";
                             vf << "\n";
                         }
+                        vf << "  ],\n  \"swaths\": [\n";
+                        for (size_t si = 0; si < swaths.size(); ++si) {
+                            const auto& swath = swaths.at(si);
+                            vf << "    {\"points\":[{\"x\":"
+                               << swath.startPoint().getX() << ",\"y\":"
+                               << swath.startPoint().getY() << "},{\"x\":"
+                               << swath.endPoint().getX() << ",\"y\":"
+                               << swath.endPoint().getY() << "}]}";
+                            if (si + 1 < swaths.size()) vf << ",";
+                            vf << "\n";
+                        }
                         vf << "  ],\n  \"eval\": {\n";
                         vf << "    \"coverage_rate\":" << eval_result.coverage_rate << ",\n";
                         vf << "    \"single_score\":" << eval_result.single_score << "\n";
@@ -3511,23 +3522,32 @@ private:
                         }
                         vf << "  ]";
 
-                        // ── 追加 connections 数组（cell 间连接直连）──
+                        // ── 追加 connections 数组（route 连接控制点，不伪装成最终曲线）──
                         vf << ",\n  \"connections\": [\n";
                         bool first_conn = true;
-                        for (size_t ci = 0; ci + 1 < num_cells; ++ci) {
-                            if (swaths_by_cells.at(ci).size() == 0 ||
-                                swaths_by_cells.at(ci + 1).size() == 0) continue;
-                            const auto& prev_swaths = swaths_by_cells.at(ci);
-                            const auto& next_swaths = swaths_by_cells.at(ci + 1);
+                        const size_t num_route_groups = route.sizeVectorSwaths();
+                        const size_t num_route_connections = route.sizeConnections();
+                        for (size_t ci = 1;
+                             ci < num_route_groups && ci < num_route_connections;
+                             ++ci) {
+                            const auto& prev_swaths = route.getSwaths(ci - 1);
+                            const auto& next_swaths = route.getSwaths(ci);
+                            if (prev_swaths.size() == 0 || next_swaths.size() == 0) continue;
                             const auto& from_pt = prev_swaths.at(prev_swaths.size() - 1).endPoint();
                             const auto& to_pt = next_swaths.at(0).startPoint();
+                            const auto& connection = route.getConnection(ci);
 
                             if (!first_conn) vf << ",\n";
                             first_conn = false;
-                            vf << "    {\"from_cell\":" << ci
-                               << ",\"to_cell\":" << (ci + 1)
-                               << ",\"path\":[[" << from_pt.getX() << "," << from_pt.getY()
-                               << "],[" << to_pt.getX() << "," << to_pt.getY() << "]]}";
+                            vf << "    {\"from_cell\":" << (ci - 1)
+                               << ",\"to_cell\":" << ci
+                               << ",\"source\":\"route_waypoints\",\"path\":[["
+                               << from_pt.getX() << "," << from_pt.getY() << "]";
+                            for (size_t pi = 0; pi < connection.size(); ++pi) {
+                                const auto& point = connection.getGeometry(pi);
+                                vf << ",[" << point.getX() << "," << point.getY() << "]";
+                            }
+                            vf << ",[" << to_pt.getX() << "," << to_pt.getY() << "]]}";
                         }
                         vf << "\n  ]\n";
 
@@ -3541,11 +3561,10 @@ private:
                                             std::istreambuf_iterator<char>());
                         rf.close();
 
-                        // Find the last "]" before "eval" — this is the path array end
-                        auto eval_pos = content.find("\"eval\"");
-                        if (eval_pos != std::string::npos) {
-                            // Find the "]" that closes the path array (before eval)
-                            auto path_end = content.rfind("]", eval_pos);
+                        // swaths 紧跟 path；在 swaths 字段之前反查 path 的闭合括号。
+                        auto swaths_pos = content.find("\"swaths\"");
+                        if (swaths_pos != std::string::npos) {
+                            auto path_end = content.rfind("]", swaths_pos);
                             if (path_end != std::string::npos) {
                                 std::ofstream vf(vis_path);
                                 // Write everything before the path end bracket
