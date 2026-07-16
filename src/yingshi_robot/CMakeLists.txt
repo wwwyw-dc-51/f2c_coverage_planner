@@ -48,6 +48,21 @@ target_include_directories(polygon_planner_node PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(path_geometry_test
+    test/path_geometry_test.cpp
+  )
+  target_link_libraries(path_geometry_test
+    Fields2Cover::Fields2Cover
+  )
+  target_include_directories(path_geometry_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+endif()
+
 install(TARGETS
   polygon_planner_node
   DESTINATION lib/${PROJECT_NAME}

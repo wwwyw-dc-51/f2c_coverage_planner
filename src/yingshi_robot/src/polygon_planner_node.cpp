@@ -15,12 +15,12 @@
 #include "yingshi_robot/swath_generator.hpp"
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_planner.hpp"
+#include "yingshi_robot/path_geometry.hpp"
 
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <vector>
-#include <map>
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -3256,7 +3256,6 @@ private:
             bool has_last_pose = false;
 
             for (const auto& state : path) {
-                geometry_msgs::msg::PoseStamped path_pose;
                 geometry_msgs::msg::Pose pose;
 
                 // 设置位置和方向
@@ -3269,11 +3268,6 @@ private:
                 pose.orientation.x = 0.0;
                 pose.orientation.y = 0.0;
                 pose.orientation.z = std::sin(yaw / 2);
-
-                // 添加到原始路径
-                path_pose.header = path_msg.header;
-                path_pose.pose = pose;
-                path_msg.poses.push_back(path_pose);
 
                 // 检测是否在Dubins连接部分
                 if (has_last_pose) {
@@ -3393,6 +3387,9 @@ private:
                                 f2c::types::PathState ps;
                                 ps.point = f2c::types::Point(px, py);
                                 ps.angle = yaw;
+                                ps.len = (pi + 1 < npt) ? (slen / (npt - 1)) : 0.0;
+                                ps.dir = f2c::types::PathDirection::FORWARD;
+                                ps.type = f2c::types::PathSectionType::SWATH;
                                 ps.velocity = 1.0;
                                 path_pre_rdp.addState(ps);
                                 path.addState(ps);
@@ -3409,6 +3406,21 @@ private:
                             "  Border fill v7: %zu swath(s) added to path", fills_added);
                     }
                 }
+            }
+
+            // F2C PathState 表示“段起点 + 航向 + 长度”；先展开完整折线，
+            // 再统一用于发布、诊断、评估和 JSON，避免漏掉最后一段或使用不同版本。
+            const auto published_path_points = yingshi::materializePath(path);
+            const auto published_path_waypoints = yingshi::materializePathWaypoints(path);
+            for (const auto& waypoint : published_path_waypoints) {
+                geometry_msgs::msg::PoseStamped path_pose;
+                path_pose.header = path_msg.header;
+                path_pose.pose.position.x = waypoint.point.getX();
+                path_pose.pose.position.y = waypoint.point.getY();
+                path_pose.pose.position.z = 0.0;
+                path_pose.pose.orientation.w = std::cos(waypoint.angle / 2.0);
+                path_pose.pose.orientation.z = std::sin(waypoint.angle / 2.0);
+                path_msg.poses.push_back(path_pose);
             }
 
             // 保存并发布路径
@@ -3466,24 +3478,25 @@ private:
                     };
 
                     // ── 1. 简化路径检测（F2C Path, RDP后 ~161点）──
-                    for (size_t pi = 0; pi < path.size(); ++pi) {
-                        if (pointInHole(path[pi].point.getX(), path[pi].point.getY()))
+                    for (const auto& point : published_path_points) {
+                        if (pointInHole(point.getX(), point.getY()))
                             ++pts_in_hole;
                     }
-                    for (size_t si = 0; si + 1 < path.size(); ++si) {
-                        if (checkSegment(path[si].point.getX(), path[si].point.getY(),
-                                        path[si+1].point.getX(), path[si+1].point.getY()))
+                    for (size_t si = 0; si + 1 < published_path_points.size(); ++si) {
+                        if (checkSegment(published_path_points[si].getX(), published_path_points[si].getY(),
+                                        published_path_points[si + 1].getX(), published_path_points[si + 1].getY()))
                             ++segs_crossing;
                     }
                     RCLCPP_INFO(this->get_logger(),
                                "  Simplified path (%zu pts, %zu segs): %zu pts in hole, %zu segs crossing",
-                               path.size(), path.size()>0 ? path.size()-1 : 0,
+                               published_path_points.size(),
+                               published_path_points.empty() ? 0 : published_path_points.size() - 1,
                                pts_in_hole, segs_crossing);
 
-                    // ── 2. 详细路径检测（PoseArray, 采样后 ~6444点）──
+                    // ── 2. 已发布路径复核（与 RViz nav_msgs::Path 完全同源）──
                     {
                         size_t d_pts = 0, d_segs = 0;
-                        const auto& poses = sampled_points.poses;
+                        const auto& poses = path_msg.poses;
                         for (size_t pi = 0; pi < poses.size(); ++pi) {
                             if (pointInHole(poses[pi].position.x, poses[pi].position.y))
                                 ++d_pts;
@@ -3507,12 +3520,12 @@ private:
                             }
                         }
                         RCLCPP_INFO(this->get_logger(),
-                                   "  Detailed path (%zu pts, %zu segs): %zu pts in hole, %zu segs crossing",
+                                   "  Published path (%zu pts, %zu segs): %zu pts in hole, %zu segs crossing",
                                    poses.size(), poses.size()>0 ? poses.size()-1 : 0,
                                    d_pts, d_segs);
                         if (d_pts > 0 || d_segs > 0) {
                             RCLCPP_WARN(this->get_logger(),
-                                       "⚠ DETAILED PATH CROSSES HOLE!");
+                                       "⚠ PUBLISHED PATH CROSSES HOLE!");
                         }
                     }
 
@@ -3548,7 +3561,7 @@ private:
                 eval_params.turn_angle_threshold = 30.0;
                 eval_params.use_grid_method = eval_use_grid_method_;
 
-                // 运行评估（用 RDP 前的完整路径，精确计算覆盖率）
+                // 运行评估（与已发布路径同源；评估器会按 PathState 语义展开完整折线）
                 f2c::types::Cells full_polygon_cells; full_polygon_cells.addGeometry(cell);
                 if (eval_use_grid_method_) {
                     double est_area = (cell.getExteriorRing().size() > 0) ? cell.area() : 0.0;
@@ -3556,10 +3569,10 @@ private:
                     RCLCPP_INFO(this->get_logger(),
                         "Grid evaluation starting: area=%.1f m², resolution=%.2f m, "
                         "est_grid_points=%d, path_points=%zu. May take a moment...",
-                        est_area, eval_grid_resolution_, est_points, path_pre_rdp.size());
+                        est_area, eval_grid_resolution_, est_points, published_path_points.size());
                 }
                 EvalResult eval_result = evaluatePlan(
-                    path_pre_rdp, swaths, full_polygon_cells, hole_rings,
+                    path, swaths, full_polygon_cells, hole_rings,
                     planning_time_ms, eval_params);
 
                 // 注入掉头可行性检查结果
@@ -3591,11 +3604,10 @@ private:
                     if (is_first_cell) {
                         std::ofstream vf(vis_path);
                         vf << "{\n  \"path\": [\n";
-                        for (size_t pi = 0; pi < path_pre_rdp.size(); ++pi) {
-                            auto& st = path_pre_rdp.getState(pi);
-                            vf << "    {\"x\":" << st.point.getX()
-                               << ",\"y\":" << st.point.getY() << "}";
-                            if (pi < path_pre_rdp.size() - 1) vf << ",";
+                        for (size_t pi = 0; pi < published_path_points.size(); ++pi) {
+                            vf << "    {\"x\":" << published_path_points[pi].getX()
+                               << ",\"y\":" << published_path_points[pi].getY() << "}";
+                            if (pi + 1 < published_path_points.size()) vf << ",";
                             vf << "\n";
                         }
                         vf << "  ],\n  \"eval\": {\n";
@@ -3685,11 +3697,10 @@ private:
                                 vf << content.substr(0, path_end);
                                 // Append new path points
                                 vf << ",\n";
-                                for (size_t pi = 0; pi < path_pre_rdp.size(); ++pi) {
-                                    auto& st = path_pre_rdp.getState(pi);
-                                    vf << "    {\"x\":" << st.point.getX()
-                                       << ",\"y\":" << st.point.getY() << "}";
-                                    if (pi < path_pre_rdp.size() - 1) vf << ",";
+                                for (size_t pi = 0; pi < published_path_points.size(); ++pi) {
+                                    vf << "    {\"x\":" << published_path_points[pi].getX()
+                                       << ",\"y\":" << published_path_points[pi].getY() << "}";
+                                    if (pi + 1 < published_path_points.size()) vf << ",";
                                     vf << "\n";
                                 }
                                 // Write the rest (closing bracket + eval + cells + connections)
@@ -3700,171 +3711,10 @@ private:
                     }
                     RCLCPP_INFO(this->get_logger(),
                         "Vis JSON saved: %s (%zu path points, %s cell)",
-                        vis_path.c_str(), path_pre_rdp.size(),
+                        vis_path.c_str(), published_path_points.size(),
                         is_first_cell ? "first" : "append");
                 }
 
-                // ── Phase 2C: RemArea 间隙填补 ──
-                // 评估后分析 uncovered_grid，对显著未覆盖聚类生成补丁 swath，
-                // 追加到 swaths 和路径中，提升最终覆盖率。
-                if (eval_use_grid_method_ &&
-                    eval_result.coverage_rate < eval_coverage_threshold_ &&
-                    eval_result.uncovered_grid.size() > 10 &&
-                    eval_result.grid_resolution > 0.0)
-                {
-                    const auto& ug = eval_result.uncovered_grid;
-                    double cluster_dist = coverage_width_ * 1.2;  // 聚类距离阈值
-
-                    // 性能保护：未覆盖点过多时仅抽样处理
-                    const size_t MAX_UG_POINTS = 5000;
-                    std::vector<std::pair<double,double>> ug_sample;
-                    if (ug.size() > MAX_UG_POINTS) {
-                        RCLCPP_WARN(this->get_logger(),
-                            "Phase 2C: %zu uncovered points > %zu limit, downsampling",
-                            ug.size(), MAX_UG_POINTS);
-                        size_t step = ug.size() / MAX_UG_POINTS;
-                        for (size_t si = 0; si < ug.size(); si += step)
-                            ug_sample.push_back(ug[si]);
-                    } else {
-                        ug_sample = ug;
-                    }
-
-                    RCLCPP_INFO(this->get_logger(),
-                        "Phase 2C: Gap filling — %zu uncovered grid points (coverage=%.1f%%)",
-                        ug.size(), eval_result.coverage_rate * 100.0);
-
-                    // 空间分箱加速聚类：将点分配到 cell_size × cell_size 的网格
-                    double cell_size = cluster_dist;
-                    std::map<std::pair<int,int>, std::vector<size_t>> bins;
-                    for (size_t ui = 0; ui < ug_sample.size(); ++ui) {
-                        int bx = static_cast<int>(std::floor(ug_sample[ui].first / cell_size));
-                        int by = static_cast<int>(std::floor(ug_sample[ui].second / cell_size));
-                        bins[{bx, by}].push_back(ui);
-                    }
-
-                    // BFS 聚类（仅检查相邻 bin 内的点，大幅减少距离计算）
-                    std::vector<bool> visited(ug_sample.size(), false);
-                    std::vector<std::vector<size_t>> clusters;
-                    for (size_t ui = 0; ui < ug_sample.size(); ++ui) {
-                        if (visited[ui]) continue;
-                        std::vector<size_t> cluster;
-                        std::vector<size_t> queue = {ui};
-                        visited[ui] = true;
-                        while (!queue.empty()) {
-                            size_t cur = queue.back(); queue.pop_back();
-                            cluster.push_back(cur);
-                            int cbx = static_cast<int>(std::floor(ug_sample[cur].first / cell_size));
-                            int cby = static_cast<int>(std::floor(ug_sample[cur].second / cell_size));
-                            // 仅检查 3×3 邻域 bin
-                            for (int dx = -1; dx <= 1; ++dx) {
-                                for (int dy = -1; dy <= 1; ++dy) {
-                                    auto it = bins.find({cbx + dx, cby + dy});
-                                    if (it == bins.end()) continue;
-                                    for (size_t vj : it->second) {
-                                        if (visited[vj]) continue;
-                                        double d = std::hypot(
-                                            ug_sample[cur].first - ug_sample[vj].first,
-                                            ug_sample[cur].second - ug_sample[vj].second);
-                                        if (d < cluster_dist) {
-                                            visited[vj] = true;
-                                            queue.push_back(vj);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if (cluster.size() >= 4) clusters.push_back(cluster);
-                    }
-
-                    if (!clusters.empty()) {
-                        RCLCPP_INFO(this->get_logger(),
-                            "  Found %zu uncovered clusters → generating filler swaths",
-                            clusters.size());
-
-                        f2c::sg::BruteForce filler_gen;
-                        f2c::types::Swaths filler_swaths;
-                        size_t filled = 0;
-
-                        for (const auto& cl : clusters) {
-                            // 聚类 bbox
-                            double cx_min=1e9,cx_max=-1e9,cy_min=1e9,cy_max=-1e9;
-                            for (auto idx : cl) {
-                                double px = ug_sample[idx].first, py = ug_sample[idx].second;
-                                if (px < cx_min) cx_min = px;
-                                if (px > cx_max) cx_max = px;
-                                if (py < cy_min) cy_min = py;
-                                if (py > cy_max) cy_max = py;
-                            }
-                            double cw = cx_max - cx_min, ch = cy_max - cy_min;
-                            if (cw < coverage_width_ * 0.5 && ch < coverage_width_ * 0.5)
-                                continue;  // 太小，跳过
-
-                            // 确定填充方向：用聚类主方向（最长边）
-                            double fill_ang = (cw >= ch) ? 0.0 : M_PI / 2.0;
-
-                            // 创建覆盖聚类 bbox 的填充 cell
-                            f2c::types::Cell fill_cell;
-                            f2c::types::LinearRing fill_ring;
-                            double margin = coverage_width_ * 0.3;
-                            fill_ring.addPoint(cx_min - margin, cy_min - margin);
-                            fill_ring.addPoint(cx_max + margin, cy_min - margin);
-                            fill_ring.addPoint(cx_max + margin, cy_max + margin);
-                            fill_ring.addPoint(cx_min - margin, cy_max + margin);
-                            fill_ring.addPoint(cx_min - margin, cy_min - margin);
-                            fill_cell.addRing(fill_ring);
-
-                            // 只保留多边形内部的 swath（裁剪到 cell 内）
-                            auto fill_sw = filler_gen.generateSwaths(fill_ang,
-                                coverage_width_, fill_cell);
-                            for (size_t fi = 0; fi < fill_sw.size(); ++fi) {
-                                // 裁剪到原始多边形内
-                                auto inside = full_polygon_cells.getLinesInside(
-                                    fill_sw.at(fi).getPath());
-                                for (size_t li = 0; li < inside.size(); ++li) {
-                                    auto seg = inside.getGeometry(li);
-                                    double slen = std::hypot(
-                                        seg.getGeometry(1).getX()-seg.getGeometry(0).getX(),
-                                        seg.getGeometry(1).getY()-seg.getGeometry(0).getY());
-                                    if (slen < min_swath_length_ * 0.5) continue;
-                                    f2c::types::Swath fs(seg, coverage_width_);
-                                    filler_swaths.push_back(fs);
-                                    swaths.push_back(fs);
-                                    ++filled;
-                                }
-                            }
-                        }
-
-                        if (filled > 0) {
-                            RCLCPP_INFO(this->get_logger(),
-                                "  Gap filling: added %zu filler swaths (%zu clusters)",
-                                filled, clusters.size());
-
-                            // 将填充 swath 追加到路径和可视化
-                            for (const auto& fsw : filler_swaths) {
-                                double dx = fsw.endPoint().getX() - fsw.startPoint().getX();
-                                double dy = fsw.endPoint().getY() - fsw.startPoint().getY();
-                                double len = std::hypot(dx, dy);
-                                double yaw = std::atan2(dy, dx);
-                                int np = std::max(2, static_cast<int>(len / path_resolution_));
-                                for (int pi = 0; pi < np; ++pi) {
-                                    double t = static_cast<double>(pi) / (np - 1);
-                                    f2c::types::PathState ps;
-                                    ps.point = f2c::types::Point(
-                                        fsw.startPoint().getX() + t*dx,
-                                        fsw.startPoint().getY() + t*dy);
-                                    path_pre_rdp.addState(ps);
-                                    geometry_msgs::msg::Pose sp;
-                                    sp.position.x = ps.point.getX();
-                                    sp.position.y = ps.point.getY();
-                                    sp.position.z = 0.0;
-                                    sp.orientation.w = std::cos(yaw/2);
-                                    sp.orientation.z = std::sin(yaw/2);
-                                    swath_path_points.poses.push_back(sp);
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
         } catch (const std::exception& e) {

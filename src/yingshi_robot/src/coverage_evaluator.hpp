@@ -25,6 +25,7 @@
 #include <fstream>
 
 #include "fields2cover.h"
+#include "yingshi_robot/path_geometry.hpp"
 
 // ============================================================================
 // 1. 数据结构
@@ -171,12 +172,7 @@ inline double ringArea(const f2c::types::LinearRing& ring) {
 
 /// 计算路径总长（所有相邻点欧氏距离累加）
 inline double computeTotalDistance(const f2c::types::Path& path) {
-    double total = 0.0;
-    if (path.size() < 2) return 0.0;
-    for (size_t i = 0; i < path.size() - 1; ++i) {
-        total += pointDistance(path[i].point, path[i + 1].point);
-    }
-    return total;
+    return yingshi::polylineLength(yingshi::materializePath(path));
 }
 
 /// 计算 Swath 线段总长
@@ -301,11 +297,12 @@ inline std::pair<double, double> computeCoverageGrid(
     }
 
     // 2. 预计算每个路径段的 y 范围（Y 轴预过滤优化的关键）
-    size_t path_seg_count = (path.size() > 1) ? (path.size() - 1) : 0;
+    const auto path_points = yingshi::materializePath(path);
+    size_t path_seg_count = (path_points.size() > 1) ? (path_points.size() - 1) : 0;
     std::vector<double> seg_min_y(path_seg_count), seg_max_y(path_seg_count);
     for (size_t pi = 0; pi < path_seg_count; ++pi) {
-        double y1 = path[pi].point.getY();
-        double y2 = path[pi + 1].point.getY();
+        double y1 = path_points[pi].getY();
+        double y2 = path_points[pi + 1].getY();
         seg_min_y[pi] = std::min(y1, y2) - half_cov;
         seg_max_y[pi] = std::max(y1, y2) + half_cov;
     }
@@ -346,8 +343,8 @@ inline std::pair<double, double> computeCoverageGrid(
                 if (gy < seg_min_y[pi] || gy > seg_max_y[pi]) continue;  // Y 轴预过滤
                 double dist = pointToSegmentDist(
                     f2c::types::Point(gx, gy),
-                    path[pi].point,
-                    path[pi + 1].point
+                    path_points[pi],
+                    path_points[pi + 1]
                 );
                 if (dist <= half_cov) covered = true;
             }
@@ -411,7 +408,7 @@ inline EvalResult evaluatePlan(
     EvalResult r;
 
     // ── 元信息 ──
-    r.path_point_count = static_cast<int>(path.size());
+    r.path_point_count = static_cast<int>(yingshi::materializePath(path).size());
     r.swath_count = static_cast<int>(swaths.size());
     r.cell_count = static_cast<int>(target_cells.size());
     r.planning_time_ms = planning_time_ms;
