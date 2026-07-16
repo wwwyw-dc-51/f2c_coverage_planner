@@ -75,8 +75,8 @@ f2c::types::Cells rectilinearDecompose(
         return fallback;
     }
 
-    // 双向切割：保留所有顶点 X/Y 坐标作为切割线
-    // 不再压缩 X 为全宽 → 孔洞附近生成垂直切割线，cell 更矩形
+    // Sweep 模式：X 压缩为 min/max 全宽条带，Y 用孔洞顶点做水平切割线
+    // 非 sweep 模式（else 分支）：保留所有顶点 X/Y 做双向切割
 
     if (xs.size() < 2) {
         f2c::types::Cells fallback;

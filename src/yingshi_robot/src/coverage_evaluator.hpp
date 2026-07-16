@@ -82,7 +82,7 @@ struct EvalResult {
 
     // ── 综合评分 ──
     double single_score = 0.0;       ///< 单场景综合得分 (0~100)
-    double coverage_gate = 0.0;      ///< coverage_rate ^ 10
+    double coverage_gate = 0.0;      ///< ((coverage_rate - 0.90) / 0.09)^3，三次门控
     double efficiency_score = 0.0;   ///< 6 项加权效率分
 
     // ── 评分分解 ──

@@ -49,6 +49,7 @@ scp -q "$PROJECT_ROOT/src/yingshi_robot/src/"*.cpp "${VM_HOST}:${WS}/src/yingshi
 scp -q "$PROJECT_ROOT/src/yingshi_robot/src/"*.hpp "${VM_HOST}:${WS}/src/yingshi_robot/src/"
 scp -q "$PROJECT_ROOT/src/yingshi_robot/include/yingshi_robot/"*.hpp "${VM_HOST}:${WS}/src/yingshi_robot/include/yingshi_robot/"
 scp -q "$PROJECT_ROOT/src/yingshi_robot/CMakeLists.txt" "${VM_HOST}:${WS}/src/yingshi_robot/"
+ssh "${VM_HOST}" "mkdir -p ${WS}/src/yingshi_robot/test" 2>/dev/null || true
 scp -q -r "$PROJECT_ROOT/src/yingshi_robot/test/"*.cpp "${VM_HOST}:${WS}/src/yingshi_robot/test/" 2>/dev/null || true
 scp -q "$PROJECT_ROOT/scripts/"*.sh "${VM_HOST}:${WS}/scripts/" 2>/dev/null || true
 scp -q "$PROJECT_ROOT/scripts/"*.py "${VM_HOST}:${WS}/scripts/" 2>/dev/null || true

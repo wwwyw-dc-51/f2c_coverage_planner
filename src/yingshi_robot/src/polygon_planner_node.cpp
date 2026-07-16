@@ -88,7 +88,7 @@ public:
         this->declare_parameter("mid_hl_width_ratio", 0.1);  // mid_hl 宽度比例（相对于覆盖宽度）
         this->declare_parameter("no_hl_width_ratio", 0.5);   // no_hl 宽度比例（相对于覆盖宽度）
         this->declare_parameter("min_hole_area", 0.1);       // 最小 holes 面积阈值（平方米），小于此面积的 holes 将被剔除
-        this->declare_parameter("swath_endpoint_shrink_distance", 0.4);  // 条带端点向中心收缩的距离（米），用于留出机器人转向空间
+        this->declare_parameter("swath_endpoint_shrink_distance", 0.03);  // 条带端点向中心收缩的距离（米），batch 实测最优值
 
         // 获取参数值并存储
         this->declare_parameter("min_swath_length", 0.2);
@@ -1511,7 +1511,7 @@ private:
                                        "Adaptive headland: min passage=%.2f m, "
                                        "original erosion=%.3f m would leave %.2f m (< effective spacing=%.2f m). "
                                        "Auto-reducing: mid_hl %.3f→%.3f, no_hl %.3f→%.3f",
-                                       min_passage, total_hl_erosion, eroded_passage, coverage_width_,
+                                       min_passage, total_hl_erosion, eroded_passage, r_w,
                                        mid_hl_width_ratio_, effective_mid_hl_ratio,
                                        no_hl_width_ratio_, effective_no_hl_ratio);
                         }

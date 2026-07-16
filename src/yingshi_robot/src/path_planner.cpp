@@ -139,58 +139,6 @@ f2c::types::Path simplifyPath(
     return result;
 }
 
-// ========== 不可执行掉头检测 ==========
-// 遍历路径中所有连续段，检查曲率是否超过限制
-size_t checkInfeasibleTurns(
-    const f2c::types::Path& path,
-    double max_diff_curv,
-    double min_turning_radius)
-{
-    size_t infeasible_count = 0;
-    (void)min_turning_radius;  // 保留接口兼容性，曲率检测仅用 max_diff_curv
-
-    for (size_t i = 0; i + 2 < path.size(); ++i) {
-        double dx1 = path[i+1].point.getX() - path[i].point.getX();
-        double dy1 = path[i+1].point.getY() - path[i].point.getY();
-        double dx2 = path[i+2].point.getX() - path[i+1].point.getX();
-        double dy2 = path[i+2].point.getY() - path[i+1].point.getY();
-
-        double len1 = std::hypot(dx1, dy1);
-        double len2 = std::hypot(dx2, dy2);
-
-        if (len1 < 1e-9 || len2 < 1e-9) continue;
-
-        double cross = dx1 * dy2 - dy1 * dx2;
-        double curv = std::abs(cross) / (len1 * len2);
-
-        if (curv > max_diff_curv) {
-            ++infeasible_count;
-        }
-    }
-
-    return infeasible_count;
-}
-
-// ========== 双向连接修复 ==========
-// 在两段路径之间插入中间过渡点，防止直接连接时 getInAngle 崩溃
-f2c::types::Path repairConnection(
-    const f2c::types::Point& p1,
-    const f2c::types::Point& p2,
-    double min_dist)
-{
-    f2c::types::Path path;
-    (void)min_dist;  // 保留参数以备后续需要插入中间过渡点
-
-    // 始终保留两个端点，确保路径至少有两个点（避免下游越界）
-    f2c::types::PathState s1, s2;
-    s1.point = p1;
-    s2.point = p2;
-    path.addState(s1);
-    path.addState(s2);
-
-    return path;
-}
-
 // ========== 贪心 Cell 排序 ==========
 // 替代死板的圆形排序 (circular sort)，根据 Boustrophedon 排序后
 // swath 的实际端点位置，动态决定 cell 遍历顺序。
@@ -275,9 +223,21 @@ void greedyCellOrder(
     double cur_x, cur_y;
     {
         const auto& c0 = swaths_by_cells[0];
-        const auto& last_sw = c0.at(c0.size() - 1);
-        cur_x = last_sw.endPoint().getX();
-        cur_y = last_sw.endPoint().getY();
+        if (c0.size() == 0) {
+            // 防御性：C0 无 swath 时使用 cell 中心作为入口
+            const auto& ring = cells.getGeometry(0).getExteriorRing();
+            double cx = 0.0, cy = 0.0;
+            for (size_t pi = 0; pi + 1 < ring.size(); ++pi) {
+                cx += ring.getGeometry(pi).getX();
+                cy += ring.getGeometry(pi).getY();
+            }
+            cur_x = cx / (ring.size() - 1);
+            cur_y = cy / (ring.size() - 1);
+        } else {
+            const auto& last_sw = c0.at(c0.size() - 1);
+            cur_x = last_sw.endPoint().getX();
+            cur_y = last_sw.endPoint().getY();
+        }
     }
 
     // 主循环：有孔洞时按圆形序遍历，反转按贪心；无孔洞时纯贪心

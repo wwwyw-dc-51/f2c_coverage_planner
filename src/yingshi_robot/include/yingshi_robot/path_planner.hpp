@@ -1,7 +1,6 @@
 #pragma once
 #include <fields2cover.h>
 #include <vector>
-#include <string>
 #include "yingshi_robot/planner_params.hpp"
 
 namespace yingshi {
@@ -23,20 +22,6 @@ f2c::types::Path simplifyPath(
     const f2c::types::Path& path,
     double epsilon,
     double turn_angle_threshold);
-
-// 检查路径中是否存在不可执行的掉头（曲率超过限制）
-// 返回不可执行段的数量
-size_t checkInfeasibleTurns(
-    const f2c::types::Path& path,
-    double max_diff_curv,
-    double min_turning_radius);
-
-// 双向连接修复：在两段路径之间插入中间点防止 getInAngle 崩溃
-// 当两点距离 < min_dist 时插入中间过渡点
-f2c::types::Path repairConnection(
-    const f2c::types::Point& p1,
-    const f2c::types::Point& p2,
-    double min_dist = 0.01);
 
 // 贪心 Cell 排序：根据 swath 端点实际位置动态决定遍历顺序
 // 从 C0 出发，每次选择端点最近的未访问 cell，支持自动翻转 swath 方向

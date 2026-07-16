@@ -58,7 +58,7 @@ bool segmentCrossesHole(double x0, double y0, double x1, double y1,
                         const std::vector<f2c::types::LinearRing>& hole_rings,
                         int num_samples)
 {
-    if (hole_rings.empty()) return false;
+    if (hole_rings.empty() || num_samples <= 0) return false;
 
     for (int k = 0; k <= num_samples; ++k) {
         double t = static_cast<double>(k) / num_samples;
@@ -80,14 +80,13 @@ void fillBoundaryGaps(
     double cov_width,
     double shrink_dist)
 {
-    (void)shrink_dist;  // 保留接口兼容性，边界补刀不收缩端点
-
     if (cell_swaths.size() == 0) return;
     const auto& cell_ring = cell.getExteriorRing();
     if (cell_ring.size() < 3) return;
     const auto& poly_ring = full_polygon.getExteriorRing();
 
     double half_w = cov_width * 0.5;
+    double effective_offset = half_w + shrink_dist;  // 正=内缩(closed), 负=外伸(open)
 
     // ── cell bbox ──
     double c_min_x = 1e9, c_max_x = -1e9, c_min_y = 1e9, c_max_y = -1e9;
@@ -168,10 +167,10 @@ void fillBoundaryGaps(
                 n_x = -n_x; n_y = -n_y;
             }
 
-            // 边界 swath：多边形边向内偏移 half_w
+            // 边界 swath：多边形边向内偏移 effective_offset（含端点缩进）
             f2c::types::LineString bline;
-            bline.addPoint(f2c::types::Point(px1 + half_w * n_x, py1 + half_w * n_y));
-            bline.addPoint(f2c::types::Point(px2 + half_w * n_x, py2 + half_w * n_y));
+            bline.addPoint(f2c::types::Point(px1 + effective_offset * n_x, py1 + effective_offset * n_y));
+            bline.addPoint(f2c::types::Point(px2 + effective_offset * n_x, py2 + effective_offset * n_y));
 
             // 裁剪到多边形内 + 排除孔洞
             f2c::types::Cells poly_tmp;

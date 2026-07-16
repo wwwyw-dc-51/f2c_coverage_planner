@@ -50,15 +50,6 @@ struct PathParams {
     double boundary_margin        = -0.3;
 };
 
-// ========== 评估参数 ==========
-struct EvalParams {
-    bool   enable_report       = true;
-    double grid_resolution     = 0.1;
-    bool   use_grid_method     = true;
-    double coverage_threshold  = 0.995;   // 目标覆盖率
-    double max_diff_curv       = 0.3;
-};
-
 // ========== 通用几何工具常量 ==========
 namespace GeomConst {
     constexpr double kHalfWidthRatio   = 0.5;     // half_w = cov_width * 0.5
