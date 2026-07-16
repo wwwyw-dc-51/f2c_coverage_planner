@@ -7,6 +7,8 @@
 基于 Fields2Cover + ROS2 Humble 的扫地机器人全覆盖路径规划系统。  
 GitHub: [wwwyw-dc-51/f2c_coverage_planner](https://github.com/wwwyw-dc-51/f2c_coverage_planner)
 
+> **物理参数校准（2026-07-16）**：实车测得车身宽约 `0.75 m`；两个直径 `0.45 m` 的软质清洁轮对称安装，名义清洁宽度约 `0.90 m`。历史批次仍使用原 demo 的 `0.95/0.45`，因此旧报告的路径长度、swath 数和碰撞净空不能作为新参数验收基线。详见 [`docs/diagnosis_batch_0716_1331.md`](docs/diagnosis_batch_0716_1331.md)。
+
 ---
 
 ## 快速开始
@@ -25,7 +27,7 @@ source install/setup.bash
 ```bash
 # 终端1：启动 planner
 ros2 run yingshi_robot polygon_planner_node --ros-args \
-  -p robot_width:=0.95 -p coverage_width:=0.45 \
+  -p robot_width:=0.75 -p coverage_width:=0.90 \
   -p use_sweep_decomp:=true -p swath_order_type:=boustrophedon \
   -p eval_enable_report:=true -p eval_use_grid_method:=true
 
@@ -79,7 +81,9 @@ f2c_coverage_planner/
 
 ---
 
-## 7 场景基准 (v9.3, batch_0716_1234)
+## 历史 7 场景算法基准（v9.3，batch_0716_1234，旧物理参数）
+
+> 本表使用 `robot_width=0.95`、`coverage_width=0.45`，仅用于追踪算法回归。`batch_0716_1331` 暴露了 Route 插入和连接拉直缺陷，也仍使用旧参数；修复缺陷并按候选 `0.75/0.90` 重跑前，当前没有可作为产品验收依据的新基线。
 
 | 场景 | 覆盖率 | 得分 | 路径长 | 耗时 | 说明 |
 |------|:------:|:----:|:-----:|:---:|------|
@@ -115,7 +119,7 @@ CoverageGate = ((coverage - 0.90) / 0.09)³   // 钳制到 [0, 1]
 |------|----------|
 | 区域分解 | Sweep 扫描线分解 |
 | 条带排序 | Boustrophedon (来回扫描) |
-| 掉头规划 | Direct (Euclidean 直连) |
+| 掉头规划 | Direct 选项（当前 connection 仍会进入 F2C 简化，待修） |
 | TSP 路由 | OR-Tools genRoute |
 | 路径简化 | RDP (Ramer-Douglas-Peucker) |
 | 覆盖评估 | 网格采样法 |
@@ -127,7 +131,10 @@ CoverageGate = ((coverage - 0.90) / 0.09)³   // 钳制到 [0, 1]
 
 | 问题 | 优先级 | 方案 |
 |------|:--:|------|
-| 碰撞安全（边界偏移用 cov_width/2 而非 robot_width/2） | P0 | 路径级裁剪（polygon 内缩 + 点投影） |
+| Route 边界补线插入顺序错误，产生跨区/越界长连接 | P0 | 使用 `addConnectedSwaths`，保证 connection 位于新 group 之前 |
+| route waypoint 绕行折线被 `simplifyConnection` 拉成弦线 | P0 | direct 模式保留控制点；弦线替换前做可行域验证 |
+| 孔洞交叉诊断未闭环，S3/S6/notched 产生误报 | P1 | 统一闭环构造 hole ring，并增加点包含测试 |
+| 候选清洁宽度 0.90 m 尚未做连续清洁痕迹验证 | P1 | 实测有效连续清洁带后再冻结产品参数 |
 | 边界补线重复/折返（两套系统同时生效） | P1 | 合并到 genRoute 前，无方向去重 |
 | cell 接缝连续漏扫带 | P1 | swath 间距/重叠优化 |
 | S4 重叠率 29.3%（40m² 走了 120m） | P1 | 动态重叠率 `N=ceil(W/C), spacing=(W-C)/(N-1)` |
