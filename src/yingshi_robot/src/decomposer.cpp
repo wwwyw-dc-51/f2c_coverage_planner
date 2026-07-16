@@ -38,24 +38,22 @@ f2c::types::Cells rectilinearDecompose(
     };
 
     if (params.use_sweep) {
-        // 双向切割：从孔洞顶点同时收集 X 和 Y 坐标
-        // Y: 外边界 + 孔洞顶点（水平切割线）
-        // X: 外边界 + 孔洞顶点（垂直切割线，新增）
-        // 不压缩 X 为全宽 → 孔洞附近 cell 更矩形，覆盖更完整
+        // Sweep 扫描线分解：仅用孔洞顶点 Y 做水平切割线
+        // X 压缩为 min/max（全宽条带），不做垂直切割
         collect_y(work_area.getExteriorRing());
         for (size_t ri = 0; ri + 1 < work_area.size(); ++ri) {
             collect_y(work_area.getInteriorRing(ri));
-            // 同时收集孔洞顶点 X 坐标（双向切割核心）
-            const auto& hr = work_area.getInteriorRing(ri);
-            for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
-                xs.push_back(hr.getGeometry(vi).getX());
-            }
         }
-        // 外边界 X 坐标
+        // X 只保留外边界 min/max，不收集孔洞顶点（回退双向切割）
         for (size_t i = 0; i + 1 < work_area.getExteriorRing().size(); ++i) {
             xs.push_back(work_area.getExteriorRing().getGeometry(i).getX());
         }
-        // 注意：不再压缩 X 为 min/max，保留孔洞顶点 X 切割线
+        // 压缩为 min/max（全宽条带）
+        auto [xmin_it, xmax_it] = std::minmax_element(xs.begin(), xs.end());
+        double x_min = *xmin_it, x_max = *xmax_it;
+        xs.clear();
+        xs.push_back(x_min);
+        xs.push_back(x_max);
     } else {
         collect_xy(work_area.getExteriorRing());
         for (size_t ri = 0; ri + 1 < work_area.size(); ++ri)

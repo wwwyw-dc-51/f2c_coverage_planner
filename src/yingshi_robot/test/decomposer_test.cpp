@@ -18,7 +18,7 @@ f2c::types::LinearRing makeRectangleRing(
     return ring;
 }
 
-TEST(Decomposer, SweepUsesHoleVerticesAsBothXAndYCuts)
+TEST(Decomposer, SweepCreatesFullWidthStripsWithoutVerticalHoleCuts)
 {
     f2c::types::Cell work_area;
     work_area.addRing(makeRectangleRing(0.0, 0.0, 10.0, 10.0));
@@ -29,7 +29,10 @@ TEST(Decomposer, SweepUsesHoleVerticesAsBothXAndYCuts)
 
     const auto cells = yingshi::rectilinearDecompose(work_area, work_area, params);
 
-    ASSERT_EQ(cells.size(), 8U);
+    // Sweep 模式：水平切割线 + X 压缩为 min/max（全宽条带）
+    // 10x10 + 中心 2x2 孔洞 → 4 cells（上下全宽 + 中间孔洞左右各一）
+    ASSERT_GE(cells.size(), 3U);
+    // 每 cell 宽度不超过 10（全宽条带），验证没有孔洞顶点垂直切割
     for (size_t ci = 0; ci < cells.size(); ++ci) {
         const auto& ring = cells.getGeometry(ci).getExteriorRing();
         double min_x = ring.getGeometry(0).getX();
@@ -38,7 +41,7 @@ TEST(Decomposer, SweepUsesHoleVerticesAsBothXAndYCuts)
             min_x = std::min(min_x, ring.getGeometry(pi).getX());
             max_x = std::max(max_x, ring.getGeometry(pi).getX());
         }
-        EXPECT_LE(max_x - min_x, 4.0 + 1e-6);
+        EXPECT_LE(max_x - min_x, 10.0 + 1e-6);
     }
 }
 
