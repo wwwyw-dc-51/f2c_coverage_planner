@@ -104,7 +104,8 @@ TEST(PathGeometry, PreservesEveryStateEndpointAcrossDiscontinuities)
 
 // 不变量测试：materializePath 是所有路径消费者的唯一数据源。
 // 发布路径、评估路径、渲染路径全部走此函数，确保三者一致。
-TEST(PathGeometry, LengthMatchesSumOfStateLengths)
+// 不连续状态之间的 gap 以直线连接，总长 = 各段长 + gap 长。
+TEST(PathGeometry, LengthIncludesStateSegmentsAndGaps)
 {
     f2c::types::Path path;
     path.addState(
@@ -116,15 +117,15 @@ TEST(PathGeometry, LengthMatchesSumOfStateLengths)
         f2c::types::PathDirection::FORWARD,
         f2c::types::PathSectionType::SWATH);
     path.addState(
-        f2c::types::Point(5.0, 5.0), 0.0, 2.0,  // discontinuous gap
+        f2c::types::Point(5.0, 5.0), 0.0, 2.0,  // discontinuous: (3,4) → (5,5) gap
         f2c::types::PathDirection::FORWARD,
         f2c::types::PathSectionType::SWATH);
 
     const auto points = yingshi::materializePath(path);
     const double total_len = yingshi::polylineLength(points);
 
-    // 期望: 3 + 4 + 2 = 9（不含 gap，gap 由 consumer 自行连接）
-    EXPECT_DOUBLE_EQ(total_len, 9.0);
+    // 3 + 4 + 2 + sqrt((5-3)²+(5-4)²) = 9 + sqrt(5) ≈ 11.236
+    EXPECT_NEAR(total_len, 9.0 + std::sqrt(5.0), 1e-9);
 }
 
 // 不变量测试：连续路径段之间无间隙，总长=各段长之和
