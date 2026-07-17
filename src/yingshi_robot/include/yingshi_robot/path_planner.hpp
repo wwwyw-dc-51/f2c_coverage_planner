@@ -53,8 +53,9 @@ f2c::types::Path simplifyPath(
     double turn_angle_threshold);
 
 // 贪心 Cell 排序：根据上游出口动态决定 Cell 顺序和 Cell 内入口变体。
-// 保留 F2C 排序器生成的规则覆盖顺序；有孔洞时仍以极角 Cell 顺序
-// 为安全骨架，无孔洞时联合选择最近 Cell 与其四种合法入口变体。
+// 保留 F2C 排序器生成的规则覆盖顺序；有孔洞时以极角 Cell 顺序为
+// 安全骨架，并用动态规划联合优化全部入口变体；无孔洞时联合选择
+// 最近 Cell 与其四种合法入口变体。
 // hole_rings: 孔洞环（用于穿洞检测，空则跳过）
 // swath_order_type: "boustrophedon"（默认）| "snake" | "spiral"
 // cell_order: [out] 遍历顺序 → 原始 no_hl 索引

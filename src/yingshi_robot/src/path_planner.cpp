@@ -559,9 +559,8 @@ f2c::types::Path simplifyPath(
 }
 
 // ========== 贪心 Cell 排序（链式递推） ==========
-// 每确定一个 Cell，才根据上一 Cell 的真实出口选择该 Cell 的内部路径变体。
-// 保留 F2C 原生排序，只在四种合法入口变体中选择连接代价最小者，
-// 避免逐条最近邻破坏规则的往复覆盖顺序。
+// 保留 F2C 原生排序，只在四种合法入口变体中优化连接代价；有孔洞时
+// 对固定极角顺序做全链动态规划，无孔洞时做 Cell/入口联合贪心。
 void greedyCellOrder(
     f2c::types::SwathsByCells& swaths_by_cells,
     std::vector<size_t>& cell_order,
@@ -640,9 +639,11 @@ void greedyCellOrder(
         return best;
     };
 
-    // C0 没有上游出口，固定使用 variant 0 作为稳定起点。
-    swaths_by_cells[0] = sortedVariant(0, 0);
-    if (n_cells == 1) return;
+    if (n_cells == 1) {
+        // C0 没有上游出口，固定使用 variant 0 作为稳定起点。
+        swaths_by_cells[0] = sortedVariant(0, 0);
+        return;
+    }
 
     // ── 有孔洞时：圆形绕洞排序作为遍历序基础 ──
     // 贪心纯端点距离在孔洞场景下可能产生跨洞连接，
@@ -689,6 +690,90 @@ void greedyCellOrder(
         // 无孔洞：用恒等序（后续贪心会动态选择）
         for (size_t i = 0; i < n_cells; ++i) traversal_order.push_back(i);
     }
+
+    if (!hole_rings.empty()) {
+        // Cell 极角顺序固定时，逐 Cell 只看入口会把坏出口留给下一 Cell。
+        // 对每个 Cell 的 4 种合法入口变体做动态规划，最小化整条链的
+        // 跨 Cell 连接代价。C0 保持 variant 0，确保起点稳定。
+        constexpr size_t kVariantCount = 4;
+        const double infinity = std::numeric_limits<double>::max();
+        std::vector<std::vector<f2c::types::Swaths>> variants(n_cells);
+        for (size_t ci = 0; ci < n_cells; ++ci) {
+            variants[ci].reserve(kVariantCount);
+            for (uint32_t variant = 0; variant < kVariantCount; ++variant) {
+                variants[ci].push_back(sortedVariant(ci, variant));
+            }
+        }
+
+        std::vector<std::vector<double>> costs(
+            n_cells, std::vector<double>(kVariantCount, infinity));
+        std::vector<std::vector<int>> parents(
+            n_cells, std::vector<int>(kVariantCount, -1));
+        costs[0][0] = 0.0;
+
+        for (size_t order_pos = 1; order_pos < n_cells; ++order_pos) {
+            const size_t previous_ci = traversal_order[order_pos - 1];
+            const size_t current_ci = traversal_order[order_pos];
+            for (size_t current_variant = 0;
+                 current_variant < kVariantCount; ++current_variant) {
+                const auto& current = variants[current_ci][current_variant];
+                if (current.size() == 0) continue;
+                for (size_t previous_variant = 0;
+                     previous_variant < kVariantCount; ++previous_variant) {
+                    if (costs[order_pos - 1][previous_variant] >=
+                        infinity * 0.5) {
+                        continue;
+                    }
+                    const auto& previous =
+                        variants[previous_ci][previous_variant];
+                    if (previous.size() == 0) continue;
+                    const auto& previous_exit =
+                        previous.at(previous.size() - 1).endPoint();
+                    const double candidate_cost =
+                        costs[order_pos - 1][previous_variant] +
+                        connectionCost(
+                            previous_exit.getX(), previous_exit.getY(),
+                            current.at(0).startPoint());
+                    if (candidate_cost < costs[order_pos][current_variant]) {
+                        costs[order_pos][current_variant] = candidate_cost;
+                        parents[order_pos][current_variant] =
+                            static_cast<int>(previous_variant);
+                    }
+                }
+            }
+        }
+
+        size_t selected_variant = 0;
+        for (size_t variant = 1; variant < kVariantCount; ++variant) {
+            if (costs[n_cells - 1][variant] <
+                costs[n_cells - 1][selected_variant]) {
+                selected_variant = variant;
+            }
+        }
+        if (costs[n_cells - 1][selected_variant] < infinity * 0.5) {
+            std::vector<size_t> selected_variants(n_cells, 0);
+            selected_variants[n_cells - 1] = selected_variant;
+            for (size_t order_pos = n_cells - 1; order_pos > 0; --order_pos) {
+                const int parent = parents[order_pos][selected_variant];
+                if (parent < 0) break;
+                selected_variant = static_cast<size_t>(parent);
+                selected_variants[order_pos - 1] = selected_variant;
+            }
+
+            f2c::types::SwathsByCells optimized;
+            for (size_t order_pos = 0; order_pos < n_cells; ++order_pos) {
+                const size_t ci = traversal_order[order_pos];
+                optimized.push_back(
+                    variants[ci][selected_variants[order_pos]]);
+            }
+            swaths_by_cells = optimized;
+            cell_order = traversal_order;
+            return;
+        }
+    }
+
+    // 无孔洞路径从固定的 C0 variant 0 开始，再联合选择 Cell 与入口变体。
+    swaths_by_cells[0] = sortedVariant(0, 0);
 
     std::vector<bool> visited(n_cells, false);
     f2c::types::SwathsByCells result;

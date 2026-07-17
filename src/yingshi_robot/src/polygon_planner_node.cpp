@@ -2194,9 +2194,9 @@ private:
                 decomposition_outline_pubs_[index]->publish(d_outline);
             }
 
-            // ── Swath 排序 + 贪心 Cell 排序（链式递推）──
-            // 走到哪个 Cell 才选择哪个 Cell 的合法入口变体，既利用上游
-            // 真实出口缩短连接，又保留 F2C 的规则内部覆盖顺序。
+            // ── Swath 排序 + Cell/入口联合优化 ──
+            // 无孔洞时按真实出口动态贪心；有孔洞时保持安全极角顺序并
+            // 联合优化整条 Cell 链，同时保留 F2C 的规则内部覆盖顺序。
             if (swath_order_type_ != "none") {
                 yingshi::greedyCellOrder(swaths_by_cells, cell_order, hole_rings,
                                          swath_order_type_);

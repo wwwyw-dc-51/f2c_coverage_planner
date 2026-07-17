@@ -130,6 +130,29 @@ TEST(BoundaryFill, CapsOuterFillAtTheCurrentCellReachableExtent)
     EXPECT_TRUE(found_bottom_boundary_fill);
 }
 
+TEST(BoundaryFill, KeepsFillOutsideHeadlandCellInTheNormalDirection)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto inset_bottom_cell = makeRectangle(0.15, 0.60, 9.85, 1.2);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 0.8, 9.85, 0.8, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, inset_bottom_cell, full_polygon, 0.0, 0.90, 0.0);
+
+    bool found_bottom_boundary_fill = false;
+    for (size_t i = 0; i < swaths.size(); ++i) {
+        const auto& swath = swaths.at(i);
+        if (std::abs(swathMidY(swath) - 0.45) > 1e-9) continue;
+        found_bottom_boundary_fill = true;
+        EXPECT_NEAR(std::min(
+            swath.startPoint().getX(), swath.endPoint().getX()), 0.15, 1e-9);
+        EXPECT_NEAR(std::max(
+            swath.startPoint().getX(), swath.endPoint().getX()), 9.85, 1e-9);
+    }
+    EXPECT_TRUE(found_bottom_boundary_fill);
+}
+
 TEST(BoundaryEndpointAdjustment, DoesNotLetHoleProximityAtMidpointShrinkSafeEndpoints)
 {
     const auto outer = makeRectangle(0.0, 0.0, 25.0, 25.0);
@@ -213,6 +236,43 @@ TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryVariant)
         cells.at(0).back().endPoint().distance(
             cells.at(1).at(0).startPoint()),
         1.0, 1e-9);
+}
+
+TEST(CellOrder, OptimizesHoleOrderedEntryVariantsAcrossTheWholeChain)
+{
+    f2c::types::Swaths first_cell;
+    first_cell.push_back(makeSwath(0.0, 0.0, 4.0, 0.0, 0.90, 0));
+
+    f2c::types::Swaths second_cell;
+    second_cell.push_back(makeSwath(0.0, 0.0, 10.0, 0.0, 0.90, 0));
+
+    f2c::types::Swaths third_cell;
+    third_cell.push_back(makeSwath(0.0, 1.0, 0.0, 2.0, 0.90, 0));
+
+    f2c::types::SwathsByCells cells {
+        first_cell, second_cell, third_cell};
+    std::vector<size_t> order;
+    const std::vector<f2c::types::LinearRing> holes {
+        yingshi::makeClosedRing({
+            f2c::types::Point(-1.1, -0.1),
+            f2c::types::Point(-0.9, -0.1),
+            f2c::types::Point(-0.9, 0.1),
+            f2c::types::Point(-1.1, 0.1),
+        })
+    };
+
+    yingshi::greedyCellOrder(cells, order, holes, "boustrophedon");
+
+    ASSERT_EQ(cells.size(), 3U);
+    ASSERT_EQ(order, (std::vector<size_t> {0U, 1U, 2U}));
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 10.0, 1e-9);
+
+    double connection_sum = 0.0;
+    for (size_t i = 1; i < cells.size(); ++i) {
+        connection_sum += cells.at(i - 1).back().endPoint().distance(
+            cells.at(i).at(0).startPoint());
+    }
+    EXPECT_LT(connection_sum, 8.0);
 }
 
 TEST(BoundaryFill, RemovesSeamFillWhenTwoSidesAlreadyCoverTheGap)

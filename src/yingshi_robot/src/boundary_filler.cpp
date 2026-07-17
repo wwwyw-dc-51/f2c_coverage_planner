@@ -210,6 +210,16 @@ void fillBoundaryGaps(
     // Phase 2B: 放宽容差 5°→20°，覆盖更多斜边缝隙
     const double angle_tol = 0.9397;  // cos(20°)
 
+    double cell_along_min = std::numeric_limits<double>::max();
+    double cell_along_max = -std::numeric_limits<double>::max();
+    for (size_t ci = 0; ci + 1 < cell_ring.size(); ++ci) {
+        const double along =
+            cell_ring.getGeometry(ci).getX() * s_dx +
+            cell_ring.getGeometry(ci).getY() * s_dy;
+        cell_along_min = std::min(cell_along_min, along);
+        cell_along_max = std::max(cell_along_max, along);
+    }
+
     // cell 质心（判断多边形内侧/孔洞外侧方向用）
     double cell_cx = 0, cell_cy = 0;
     for (size_t ci = 0; ci + 1 < cell_ring.size(); ++ci) {
@@ -277,14 +287,42 @@ void fillBoundaryGaps(
             bline.addPoint(f2c::types::Point(px1 + boundary_offset * n_x, py1 + boundary_offset * n_y));
             bline.addPoint(f2c::types::Point(px2 + boundary_offset * n_x, py2 + boundary_offset * n_y));
 
-            // 纵向端点必须受当前 cell 约束。若按完整 polygon 裁剪，补线会比
-            // 相邻普通 swath 多伸出一截，Route 连接就会先反向再斜接形成毛刺。
-            f2c::types::Cells cell_tmp;
-            cell_tmp.addGeometry(cell);
-            auto inside = cell_tmp.getLinesInside(bline);
+            // 先按完整作业区裁剪，保留位于 no_hl Cell 法向范围外、但仍负责
+            // 真实边界覆盖的补线（S6 门洞/柜边）。随后只沿 Swath 行进方向
+            // 限制到当前 Cell 的可达投影范围，避免端点多伸出形成毛刺。
+            f2c::types::Cells poly_tmp;
+            poly_tmp.addGeometry(full_polygon);
+            auto inside = poly_tmp.getLinesInside(bline);
 
             for (size_t li = 0; li < inside.size(); ++li) {
                 auto seg = inside.getGeometry(li);
+                const double x0 = seg.getGeometry(0).getX();
+                const double y0 = seg.getGeometry(0).getY();
+                const double x1 = seg.getGeometry(1).getX();
+                const double y1 = seg.getGeometry(1).getY();
+                const double along0 = x0 * s_dx + y0 * s_dy;
+                const double along1 = x1 * s_dx + y1 * s_dy;
+                const double along_delta = along1 - along0;
+                if (std::abs(along_delta) < 1e-9) continue;
+
+                const double range_t0 =
+                    (cell_along_min - along0) / along_delta;
+                const double range_t1 =
+                    (cell_along_max - along0) / along_delta;
+                const double clipped_t0 = std::max(
+                    0.0, std::min(range_t0, range_t1));
+                const double clipped_t1 = std::min(
+                    1.0, std::max(range_t0, range_t1));
+                if (clipped_t1 - clipped_t0 < 1e-9) continue;
+
+                f2c::types::LineString capped_seg;
+                capped_seg.addPoint(f2c::types::Point(
+                    x0 + clipped_t0 * (x1 - x0),
+                    y0 + clipped_t0 * (y1 - y0)));
+                capped_seg.addPoint(f2c::types::Point(
+                    x0 + clipped_t1 * (x1 - x0),
+                    y0 + clipped_t1 * (y1 - y0)));
+                seg = capped_seg;
                 double seg_len = std::hypot(
                     seg.getGeometry(1).getX() - seg.getGeometry(0).getX(),
                     seg.getGeometry(1).getY() - seg.getGeometry(0).getY());
