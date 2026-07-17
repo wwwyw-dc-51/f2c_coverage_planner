@@ -2211,33 +2211,28 @@ private:
                 }
             }
 
-            // 第五步：生成路由（Snake 模式绕过 TSP，避免跨孔洞连接）
-            bool show_solver_log = use_optimized_planner_ && ortools_exact_solve_;
+            // 第五步：生成路由
+            // redirect_swaths=false 保留贪心排序选定的 swath 方向，
+            // 避免 OR-Tools 翻转已精心选定的 Cell 内路径。
             f2c::types::Route route;
 
-            // ── Phase 2E: Snake 安全路径 ──
-            // Snake 模式不使用 TSP genRoute，避免 TSP 在孔洞间创建越界连接。
-            // 改为：cells 已按贪心排序 → 逐 cell 拼接 swaths + 直连，
-            // 配合下游 connection 修复（walkBoundary）实现零出界保证。
+            // ── Phase 2E: Route 生成 ──
             if (swath_order_type_ == "snake") {
+                // Snake 模式：TSP-free 直连，避免跨孔洞连接
                 RCLCPP_INFO(this->get_logger(),
-                    "Step 5: Snake safe path — circular hole order, direct headland connections");
+                    "Step 5: Snake safe path — greedy cell order, direct connections");
 
-                // 初始空连接（起点）
                 route.addConnection(f2c::types::MultiPoint());
 
                 for (size_t ci = 0; ci < swaths_by_cells.size(); ++ci) {
-                    // 跳过空 cell（swaths 可能在 filter 后被移除）
                     if (swaths_by_cells.at(ci).size() == 0) {
                         RCLCPP_WARN(this->get_logger(),
                             "  Snake: skipping empty cell %zu", ci);
                         continue;
                     }
 
-                    // 添加当前 cell 的 swaths（已 snake 排序）
                     route.addSwaths(swaths_by_cells.at(ci));
 
-                    // 创建到下一个非空 cell 的连接
                     f2c::types::MultiPoint conn;
                     size_t next_ci = ci + 1;
                     while (next_ci < swaths_by_cells.size() &&
@@ -2245,7 +2240,6 @@ private:
                         ++next_ci;
                     }
                     if (next_ci < swaths_by_cells.size()) {
-                        // 当前 cell 最后一条 swath 终点 → 下一 cell 第一条 swath 起点
                         const auto& last_sw = swaths_by_cells.at(ci).back();
                         const auto& next_sw = swaths_by_cells.at(next_ci).at(0);
                         double lx = last_sw.endPoint().getX();
@@ -2253,11 +2247,8 @@ private:
                         double nx = next_sw.startPoint().getX();
                         double ny = next_sw.startPoint().getY();
 
-                        // 用 headland 边界做最短路径（如果 mid_hl 非空）
                         if (mid_hl.size() > 0) {
-                            // 沿 headland 外环走最短路径
                             conn.addPoint(lx, ly);
-                            // 取 headland 外环中点作为中间路点（简单绕行）
                             const auto& hl_ring = mid_hl.getGeometry(0).getExteriorRing();
                             if (hl_ring.size() > 2) {
                                 double hlx = 0, hly = 0;
@@ -2267,7 +2258,6 @@ private:
                                 }
                                 hlx /= (hl_ring.size() - 1);
                                 hly /= (hl_ring.size() - 1);
-                                // 在 headland 中心与目标点之间插入路点
                                 double mx = (lx + nx) * 0.5, my = (ly + ny) * 0.5;
                                 double dx2 = mx - hlx, dy2 = my - hly;
                                 double dlen = std::hypot(dx2, dy2);
@@ -2289,7 +2279,8 @@ private:
                     route.sizeVectorSwaths(), route.sizeConnections());
             } else {
                 RCLCPP_INFO(this->get_logger(),
-                           "Step 5: Planning route (cells in circular order, headland-routed)...");
+                    "Step 5: Planning route (headland-routed)...");
+                bool show_solver_log = use_optimized_planner_ && ortools_exact_solve_;
                 f2c::rp::RoutePlannerBase route_planner;
                 route = route_planner.genRoute(
                     mid_hl, swaths_by_cells, show_solver_log);
@@ -2299,8 +2290,7 @@ private:
             }
 
             // ── 孔洞感知：修复 genRoute 连接穿洞 ──
-            // genRoute 的 headland 最短路径在 PathPlanning::simplifyConnection 中
-            // 可能被简化为直接 Dubins 连接（转角 <0.1rad 的中间点被过滤），穿越孔洞。
+            // genRoute 的 headland 最短路径中，简化逻辑可能产生穿洞连接。
             // 此处检测穿洞的 connection 段，沿孔洞边界插入强制绕行路点。
             if (!last_holes_[index].empty()) {
                 // 构建孔洞环（LinearRing，用于射线法 + 交点计算）

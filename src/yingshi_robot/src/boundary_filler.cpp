@@ -408,6 +408,8 @@ void fillBoundaryGaps(
                 reordered.push_back(cell_swaths.at(si));
             for (auto& ef : end_fills) reordered.push_back(ef);
             cell_swaths = reordered;
+            start_fills.clear();
+            end_fills.clear();
         }
     }
 
@@ -648,6 +650,18 @@ void fillBoundaryGaps(
                 }
             }
         }
+    }
+
+    // 孔洞边界补线合并回 cell_swaths（与外环补线对称）
+    if (!start_fills.empty() || !end_fills.empty()) {
+        f2c::types::Swaths reordered;
+        for (size_t i = 0; i < start_fills.size(); ++i)
+            reordered.push_back(start_fills.at(i));
+        for (size_t i = 0; i < cell_swaths.size(); ++i)
+            reordered.push_back(cell_swaths.at(i));
+        for (size_t i = 0; i < end_fills.size(); ++i)
+            reordered.push_back(end_fills.at(i));
+        cell_swaths = reordered;
     }
 }
 
