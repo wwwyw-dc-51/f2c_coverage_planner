@@ -65,6 +65,7 @@ private:
     double eval_grid_resolution_;
     bool eval_use_grid_method_;
     double eval_coverage_threshold_;
+    std::string output_dir_;
 
     // ── 优化开关参数 ──
     bool use_optimized_planner_;       // ★ 总开关：true=优化版 false=原版
@@ -113,6 +114,7 @@ public:
         this->declare_parameter("eval_grid_resolution", 0.1);
         this->declare_parameter("eval_use_grid_method", false);
         this->declare_parameter("eval_coverage_threshold", 0.995);
+        this->declare_parameter("output_dir", "/tmp");  // 调试输出目录，实车可改为只读挂载路径
 
         // ── 优化参数 ──
         this->declare_parameter("use_optimized_planner", false);
@@ -365,6 +367,7 @@ private:
         eval_grid_resolution_ = get_double("eval_grid_resolution");
         eval_use_grid_method_ = get_bool("eval_use_grid_method");
         eval_coverage_threshold_ = get_double("eval_coverage_threshold");
+        output_dir_ = get_string("output_dir");
 
         // ── 优化参数 ──
         use_optimized_planner_ = get_bool("use_optimized_planner");
@@ -784,7 +787,7 @@ private:
             if (!polygon_received_[i]) continue;
             
             if (!last_paths_[i].poses.empty()) {
-                last_paths_[i].header.stamp = this->now();
+                // 保留原始规划时间戳，不刷新——旧计划不得伪装成新计划。
                 path_pubs_[i]->publish(last_paths_[i]);
             }
             if (!last_swath_points_[i].poses.empty()) {
@@ -1378,7 +1381,7 @@ private:
             // ── 重置 Vis JSON 状态 ──
             // 用 cell 计数器替代文件存在性检测，避免多次 polygon 处理叠加旧数据
             vis_json_cell_count_ = 0;
-            std::string vis_path_init = "/tmp/f2c_vis_polygon_" + std::to_string(polygon_id) + ".json";
+            std::string vis_path_init = output_dir_ + "/f2c_vis_polygon_" + std::to_string(polygon_id) + ".json";
             std::remove(vis_path_init.c_str());
 
             // ── 计时开始 ──
@@ -3265,7 +3268,7 @@ private:
 
                 // 将网格覆盖数据写入 JSON（供渲染脚本复用，避免 Python 重算）
                 if (eval_use_grid_method_ && eval_result.grid_resolution > 0.0) {
-                    std::string grid_path = "/tmp/f2c_grid_" + scenario_label + ".json";
+                    std::string grid_path = output_dir_ + "/f2c_grid_" + scenario_label + ".json";
                     writeGridJson(eval_result, grid_path);
                 }
 
@@ -3273,7 +3276,7 @@ private:
                 // 支持多 cell 多边形：首个 cell 创建文件，后续 cell 追加路径点。
                 // 使用计数器而非文件存在性检测，避免多次 polygon 处理叠加旧数据。
                 {
-                    std::string vis_path = "/tmp/f2c_vis_" + scenario_label + ".json";
+                    std::string vis_path = output_dir_ + "/f2c_vis_" + scenario_label + ".json";
                     bool is_first_cell = (vis_json_cell_count_ == 0);
                     ++vis_json_cell_count_;
 

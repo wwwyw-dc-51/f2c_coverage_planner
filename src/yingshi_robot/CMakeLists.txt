@@ -57,16 +57,22 @@ target_include_directories(coverage_planner_core PUBLIC
 )
 
 # ── 离线测评接口：评分/网格报告不得成为规划核心的依赖 ──
-add_library(coverage_planner_evaluation INTERFACE)
-add_library(${PROJECT_NAME}::coverage_planner_evaluation ALIAS
-  coverage_planner_evaluation)
-target_link_libraries(coverage_planner_evaluation INTERFACE
-  Fields2Cover::Fields2Cover
-)
-target_include_directories(coverage_planner_evaluation INTERFACE
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-)
+# 实车部署时设置 -DYINGSHI_ENABLE_EVALUATION=OFF 即可从生产二进制中完全移除。
+option(YINGSHI_ENABLE_EVALUATION
+  "Build offline coverage evaluation (scoring, grid, JSON reports)" ON)
+
+if(YINGSHI_ENABLE_EVALUATION)
+  add_library(coverage_planner_evaluation INTERFACE)
+  add_library(${PROJECT_NAME}::coverage_planner_evaluation ALIAS
+    coverage_planner_evaluation)
+  target_link_libraries(coverage_planner_evaluation INTERFACE
+    Fields2Cover::Fields2Cover
+  )
+  target_include_directories(coverage_planner_evaluation INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  )
+endif()
 
 # ── ROS 适配层：消息转换、参数和发布 ──
 add_executable(polygon_planner_node
@@ -82,9 +88,16 @@ ament_target_dependencies(polygon_planner_node
 )
 target_link_libraries(polygon_planner_node
   coverage_planner_core
-  coverage_planner_evaluation
   ortools::ortools
 )
+if(YINGSHI_ENABLE_EVALUATION)
+  target_link_libraries(polygon_planner_node
+    coverage_planner_evaluation
+  )
+  target_compile_definitions(polygon_planner_node PRIVATE
+    YINGSHI_EVAL_ENABLED=1
+  )
+endif()
 target_include_directories(polygon_planner_node PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
@@ -119,12 +132,14 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
-  ament_add_gtest(coverage_evaluator_test
-    test/coverage_evaluator_test.cpp
-  )
-  target_link_libraries(coverage_evaluator_test
-    coverage_planner_evaluation
-  )
+  if(YINGSHI_ENABLE_EVALUATION)
+    ament_add_gtest(coverage_evaluator_test
+      test/coverage_evaluator_test.cpp
+    )
+    target_link_libraries(coverage_evaluator_test
+      coverage_planner_evaluation
+    )
+  endif()
 
   ament_add_gtest(planner_config_test
     test/planner_config_test.cpp
