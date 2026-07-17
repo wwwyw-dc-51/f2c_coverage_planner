@@ -1613,6 +1613,67 @@ private:
             }
         }
 
+        // 8. 评估（复用 PlannerCore 结果，重建需要的中间变量）
+#if YINGSHI_EVAL_ENABLED
+        if (eval_enable_report_) {
+            // 构建 full_polygon Cells（含孔洞内环）
+            f2c::types::Cells full_polygon_cells;
+            full_polygon_cells.addGeometry(req.polygon);
+
+            // 构建孔洞环
+            std::vector<f2c::types::LinearRing> eval_hole_rings;
+            for (const auto& hole : last_holes_[index]) {
+                auto hr = makeClosedF2CRing(hole);
+                if (hr.size() >= 4) eval_hole_rings.push_back(hr);
+            }
+
+            // 从 Route 提取所有 swaths
+            f2c::types::Swaths eval_swaths;
+            for (size_t i = 0; i < result.route.sizeVectorSwaths(); ++i) {
+                const auto& rs = result.route.getSwaths(i);
+                for (size_t j = 0; j < rs.size(); ++j)
+                    eval_swaths.push_back(rs.at(j));
+            }
+
+            EvalParams eval_params;
+            eval_params.max_diff_curv = max_diff_curv_;
+            eval_params.coverage_width = coverage_width_;
+            eval_params.swath_overlap_ratio = swath_overlap_ratio_;
+            eval_params.turn_planner_type = turn_planner_type_.c_str();
+            eval_params.grid_resolution = eval_grid_resolution_;
+            eval_params.coverage_threshold = eval_coverage_threshold_;
+            eval_params.turn_angle_threshold = 30.0;
+            eval_params.use_grid_method = eval_use_grid_method_;
+
+            if (eval_use_grid_method_) {
+                double est_area = (req.polygon.getExteriorRing().size() > 0)
+                    ? req.polygon.area() : 0.0;
+                int est_points = static_cast<int>(est_area /
+                    (eval_grid_resolution_ * eval_grid_resolution_));
+                RCLCPP_INFO(this->get_logger(),
+                    "Core eval: area=%.1f m², resolution=%.2f m, "
+                    "est_grid_points=%d, path_points=%zu",
+                    est_area, eval_grid_resolution_, est_points,
+                    result.path_points.size());
+            }
+
+            EvalResult eval_result = evaluatePlan(
+                result.path, eval_swaths, full_polygon_cells, eval_hole_rings,
+                result.planning_time_ms, eval_params);
+
+            std::string scenario_label = "polygon_" + std::to_string(polygon_id);
+            std::string report = formatEvalReport(eval_result, scenario_label.c_str());
+            RCLCPP_INFO(this->get_logger(), "Core %s", report.c_str());
+
+            // 写网格 JSON
+            if (eval_use_grid_method_ && eval_result.grid_resolution > 0.0) {
+                std::string grid_path = output_dir_ + "/f2c_grid_core_"
+                    + scenario_label + ".json";
+                writeGridJson(eval_result, grid_path);
+            }
+        }
+#endif
+
         auto planning_end = std::chrono::steady_clock::now();
         double total_ms = std::chrono::duration<double, std::milli>(
             planning_end - planning_start).count();
