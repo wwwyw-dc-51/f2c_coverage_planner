@@ -106,12 +106,14 @@ target_include_directories(polygon_planner_node PRIVATE
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
-  ament_add_gtest(path_geometry_test
-    test/path_geometry_test.cpp
-  )
-  target_link_libraries(path_geometry_test
-    coverage_planner_evaluation
-  )
+  if(YINGSHI_ENABLE_EVALUATION)
+    ament_add_gtest(path_geometry_test
+      test/path_geometry_test.cpp
+    )
+    target_link_libraries(path_geometry_test
+      coverage_planner_evaluation
+    )
+  endif()
 
   ament_add_gtest(decomposer_test
     test/decomposer_test.cpp
