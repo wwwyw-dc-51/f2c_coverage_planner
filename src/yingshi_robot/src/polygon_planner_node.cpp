@@ -18,6 +18,7 @@
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/path_geometry.hpp"
+#include "yingshi_robot/path_sanity_check.hpp"
 #include "yingshi_robot/planner_core.hpp"
 
 #include <fstream>
@@ -1506,6 +1507,26 @@ private:
             ps.pose.orientation.w = std::cos(wp.angle / 2.0);
             ps.pose.orientation.z = std::sin(wp.angle / 2.0);
             path_msg.poses.push_back(ps);
+        }
+
+        // 发布前自洽性检查
+        {
+            std::vector<f2c::types::LinearRing> sanity_holes;
+            for (const auto& hole : last_holes_[index]) {
+                auto hr = makeClosedF2CRing(hole);
+                if (hr.size() >= 4) sanity_holes.push_back(hr);
+            }
+            auto sanity = yingshi::checkPathSanity(
+                result.path, result.path_points, req.polygon,
+                sanity_holes, result.total_swaths);
+            if (!sanity.passed) {
+                for (const auto& iss : sanity.issues) {
+                    if (iss.severity == yingshi::SanityIssue::Severity::ERROR)
+                        RCLCPP_ERROR(this->get_logger(), "Core Sanity: %s", iss.message.c_str());
+                    else
+                        RCLCPP_WARN(this->get_logger(), "Core Sanity: %s", iss.message.c_str());
+                }
+            }
         }
 
         last_paths_[index] = path_msg;
@@ -3423,6 +3444,26 @@ private:
                 path_pose.pose.orientation.w = std::cos(waypoint.angle / 2.0);
                 path_pose.pose.orientation.z = std::sin(waypoint.angle / 2.0);
                 path_msg.poses.push_back(path_pose);
+            }
+
+            // ── 路径自洽性检查（publish 前最后一个 seam）──
+            {
+                std::vector<f2c::types::LinearRing> sanity_holes;
+                for (const auto& hole : last_holes_[index]) {
+                    auto hr = makeClosedF2CRing(hole);
+                    if (hr.size() >= 4) sanity_holes.push_back(hr);
+                }
+                auto sanity = yingshi::checkPathSanity(
+                    path, published_path_points, cell,
+                    sanity_holes, swaths.size());
+                if (!sanity.passed) {
+                    for (const auto& iss : sanity.issues) {
+                        if (iss.severity == yingshi::SanityIssue::Severity::ERROR)
+                            RCLCPP_ERROR(this->get_logger(), "Sanity: %s", iss.message.c_str());
+                        else
+                            RCLCPP_WARN(this->get_logger(), "Sanity: %s", iss.message.c_str());
+                    }
+                }
             }
 
             // 保存并发布路径

@@ -75,7 +75,7 @@ if [[ "$MODE" == "--test" ]]; then
 
     RESULT=$(ssh "${VM_HOST}" "
         source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
-        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        export LD_LIBRARY_PATH=${WS}/install/fields2cover/lib:${WS}/install/lib:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
         LOG=/tmp/f2c_test_\$(date +%H%M%S).log && \
         ros2 run yingshi_robot polygon_planner_node --ros-args \
           -p robot_width:=0.95 -p coverage_width:=0.45 \
@@ -132,7 +132,7 @@ elif [[ "$MODE" == "--batch" ]]; then
 
     ssh "${VM_HOST}" "
         source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
-        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        export LD_LIBRARY_PATH=${WS}/install/fields2cover/lib:${WS}/install/lib:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
         bash ${WS}/scripts/batch_test_v2.sh ${VM_RESULT} 2>&1
     " 2>&1 | tee /tmp/f2c_batch.log
 
@@ -152,7 +152,7 @@ elif [[ "$MODE" == "--compare" ]]; then
 
     ssh "${VM_HOST}" "
         source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
-        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        export LD_LIBRARY_PATH=${WS}/install/fields2cover/lib:${WS}/install/lib:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
         bash ${WS}/scripts/compare_snake_vs_custom.sh 2>&1
     " 2>&1
 
@@ -172,7 +172,7 @@ elif [[ "$MODE" == "--run" ]]; then
     echo "   (Press Ctrl-C in VM terminal to stop)"
     ssh -t "${VM_HOST}" "
         source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
-        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
+        export LD_LIBRARY_PATH=${WS}/install/fields2cover/lib:${WS}/install/lib:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
         bash ${WS}/install/yingshi_robot/share/yingshi_robot/scripts/run_f2c_optimized.sh 2>&1
     "
 
