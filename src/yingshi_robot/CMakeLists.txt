@@ -7,6 +7,7 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -15,13 +16,27 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
-# Fields2Cover: 预编译在 install/fields2cover/ 下
-list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../install/fields2cover")
+# 优先使用调用方显式提供的安装前缀；仓库内目录只作为开发环境兼容回退。
+set(YINGSHI_FIELDS2COVER_PREFIX "" CACHE PATH
+  "Fields2Cover installation prefix")
+if(YINGSHI_FIELDS2COVER_PREFIX)
+  list(PREPEND CMAKE_PREFIX_PATH "${YINGSHI_FIELDS2COVER_PREFIX}")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../install/fields2cover")
+  list(PREPEND CMAKE_PREFIX_PATH
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../install/fields2cover")
+endif()
 find_package(Fields2Cover REQUIRED)
 
-# 查找 Fields2Cover 自带的 OR-Tools
-# CMAKE_CURRENT_SOURCE_DIR = .../src/yingshi_robot → .. = .../src → Fields2Cover 的父目录
-list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../Fields2Cover/third_party/ortools-src")
+# OR-Tools 同样允许使用系统安装或交叉编译 sysroot 中的包配置。
+set(YINGSHI_ORTOOLS_PREFIX "" CACHE PATH
+  "OR-Tools installation prefix")
+if(YINGSHI_ORTOOLS_PREFIX)
+  list(PREPEND CMAKE_PREFIX_PATH "${YINGSHI_ORTOOLS_PREFIX}")
+elseif(EXISTS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Fields2Cover/third_party/ortools-src")
+  list(PREPEND CMAKE_PREFIX_PATH
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Fields2Cover/third_party/ortools-src")
+endif()
 find_package(ortools CONFIG REQUIRED)
 
 # ── 纯规划算法库：不依赖 ROS、评估器或文件输出 ──
