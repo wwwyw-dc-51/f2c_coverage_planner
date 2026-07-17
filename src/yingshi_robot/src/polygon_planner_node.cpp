@@ -2022,6 +2022,15 @@ private:
                     this->clearPlanningCacheForPolygon(index, true);
                     return;
                 }
+
+                const size_t pruned_seam_fills =
+                    yingshi::pruneRedundantCellSeamFills(
+                        swaths_by_cells, no_hl, cell, r_w);
+                if (pruned_seam_fills > 0) {
+                    RCLCPP_INFO(this->get_logger(),
+                        "Redundant Cell seam fills removed: %zu",
+                        pruned_seam_fills);
+                }
             }
 
             // ── 构建孔洞环（供裁剪和贪心排序共用）──
@@ -2611,8 +2620,18 @@ private:
                            effective_margin);
             }
 
-            // Route 可能在 genRoute 后继续追加边界补线；所有变更完成后统一修复，
-            // 避免后追加 connection 绕过前面的孔洞检查。
+            // genRoute 早于端点缩进，connection 仍指向旧 swath 端点。
+            // 先同步首尾点，避免路径探到旧边界后立即折返形成短毛刺。
+            const size_t synchronized_connections =
+                yingshi::synchronizeRouteConnectionEndpoints(
+                    route, 2.0 * std::abs(effective_margin));
+            if (synchronized_connections > 0) {
+                RCLCPP_INFO(this->get_logger(),
+                    "Route endpoint synchronization: %zu connections updated",
+                    synchronized_connections);
+            }
+
+            // 所有 Route 变更完成后统一修复孔洞连接。
             // 1 mm 仅用于让中心线离开几何边界，机器人外形净空由上游 headland 保证。
             const size_t final_repaired_connections =
                 yingshi::repairRouteConnectionsAroundHoles(

@@ -26,6 +26,16 @@ void fillBoundaryGaps(
     double shrink_dist,
     double robot_half_width = 0.0);
 
+// 从全部 Cell 的 swath 中删除功能性重复的内部接缝补线。
+// 仅当接缝两侧原有 swath 的总间距不超过覆盖宽度加容差时删除；
+// 真正超过覆盖能力的缺口仍保留一条补线。返回删除数量。
+size_t pruneRedundantCellSeamFills(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const f2c::types::Cells& cells,
+    const f2c::types::Cell& full_polygon,
+    double cov_width,
+    double gap_tolerance_ratio = 0.05);
+
 // ========== 孔洞检测工具 ==========
 
 // 从顶点构造闭合环；若输入未重复首点，则自动补上。

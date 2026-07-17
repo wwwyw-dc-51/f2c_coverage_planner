@@ -28,6 +28,14 @@ size_t repairRouteConnectionsAroundHoles(
     const std::vector<f2c::types::LinearRing>& hole_rings,
     double clearance);
 
+// swath 端点缩进后，同步每条跨 group connection 的首尾点。
+// 距新端点不超过 max_endpoint_shift 的单控制点视为旧端点并删除；
+// 更远的单控制点和多点 connection 的中间绕障点保持不变。
+// 返回实际修改的 connection 数量。
+size_t synchronizeRouteConnectionEndpoints(
+    f2c::types::Route& route,
+    double max_endpoint_shift);
+
 // RDP (Ramer-Douglas-Peucker) 路径简化（分段感知版）
 // 先检测转弯点（方向突变标记为段边界），再逐段执行 RDP
 // epsilon: 简化容差 (m)

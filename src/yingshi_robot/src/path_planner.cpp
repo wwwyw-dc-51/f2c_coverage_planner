@@ -305,6 +305,73 @@ size_t repairRouteConnectionsAroundHoles(
     return repaired_connections;
 }
 
+size_t synchronizeRouteConnectionEndpoints(
+    f2c::types::Route& route,
+    double max_endpoint_shift)
+{
+    constexpr double kEndpointTolerance = 1e-9;
+    const double endpoint_shift_limit =
+        std::max(0.0, max_endpoint_shift) + kEndpointTolerance;
+    size_t synchronized = 0;
+    const size_t group_count = route.sizeVectorSwaths();
+    const size_t connection_count = route.sizeConnections();
+
+    for (size_t group_idx = 1;
+         group_idx < group_count && group_idx < connection_count;
+         ++group_idx) {
+        const auto& current_swaths = route.getSwaths(group_idx);
+        const auto& connection = route.getConnection(group_idx);
+        if (current_swaths.size() == 0 || connection.size() == 0) continue;
+
+        size_t previous_idx = group_idx;
+        while (previous_idx > 0) {
+            --previous_idx;
+            if (route.getSwaths(previous_idx).size() > 0) break;
+        }
+        const auto& previous_swaths = route.getSwaths(previous_idx);
+        if (previous_swaths.size() == 0) continue;
+
+        const auto previous_end = previous_swaths.back().endPoint();
+        const auto current_start = current_swaths.at(0).startPoint();
+        const auto& old_first = connection.getGeometry(0);
+        const auto& old_last = connection.getGeometry(connection.size() - 1);
+        const bool first_changed =
+            old_first.distance(previous_end) > kEndpointTolerance;
+        const bool last_changed =
+            old_last.distance(current_start) > kEndpointTolerance;
+        if (!first_changed && !last_changed) continue;
+
+        f2c::types::MultiPoint synchronized_connection;
+        synchronized_connection.addPoint(
+            previous_end.getX(), previous_end.getY());
+
+        if (connection.size() == 1) {
+            // 单点若靠近新首尾点，就是缩进前遗留的旧端点；远离两端
+            // 才按真实绕障控制点保留。
+            const double distance_to_endpoint = std::min(
+                old_first.distance(previous_end),
+                old_first.distance(current_start));
+            if (distance_to_endpoint > endpoint_shift_limit) {
+                synchronized_connection.addPoint(
+                    old_first.getX(), old_first.getY());
+            }
+        } else {
+            for (size_t point_idx = 1;
+                 point_idx + 1 < connection.size(); ++point_idx) {
+                const auto& point = connection.getGeometry(point_idx);
+                synchronized_connection.addPoint(point.getX(), point.getY());
+            }
+        }
+
+        synchronized_connection.addPoint(
+            current_start.getX(), current_start.getY());
+        route.setConnection(group_idx, synchronized_connection);
+        ++synchronized;
+    }
+
+    return synchronized;
+}
+
 f2c::types::Path planDirectPath(
     const f2c::types::Route& route,
     double cruise_velocity)

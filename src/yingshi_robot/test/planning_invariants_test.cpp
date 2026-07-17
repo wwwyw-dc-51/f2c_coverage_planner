@@ -60,6 +60,129 @@ TEST(BoundaryFill, FillsAnInternalCellSeamBeyondHalfCoverageWidth)
     EXPECT_NEAR(swathMidY(swaths.at(1)), 6.0, 1e-9);
 }
 
+TEST(BoundaryFill, SkipsOuterFillWhenExistingSwathAlreadyCoversBoundary)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto bottom_cell = makeRectangle(0.0, 0.0, 10.0, 1.2);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 0.2, 9.85, 0.2, 0.90));
+    swaths.push_back(makeSwath(0.15, 0.8, 9.85, 0.8, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, bottom_cell, full_polygon, 0.0, 0.90, 0.0);
+
+    EXPECT_EQ(swaths.size(), 2U);
+}
+
+TEST(BoundaryFill, KeepsOuterFillWhenSlantedSwathEndpointLeavesBoundaryGap)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto bottom_cell = makeRectangle(0.0, 0.0, 10.0, 1.2);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 0.1, 9.85, 0.7, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, bottom_cell, full_polygon, 0.0, 0.90, 0.0);
+
+    EXPECT_EQ(swaths.size(), 2U);
+}
+
+TEST(BoundaryFill, RemovesSeamFillWhenTwoSidesAlreadyCoverTheGap)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Cells cells;
+    cells.addGeometry(makeRectangle(0.0, 0.0, 10.0, 4.0));
+    cells.addGeometry(makeRectangle(0.0, 4.0, 10.0, 8.0));
+
+    f2c::types::Swaths lower;
+    lower.push_back(makeSwath(0.15, 3.55, 9.85, 3.55, 0.90));
+    f2c::types::Swaths upper;
+    upper.push_back(makeSwath(0.0, 4.0, 10.0, 4.0, 0.90));
+    upper.push_back(makeSwath(0.15, 4.48, 9.85, 4.48, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {lower, upper};
+
+    EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
+        swaths_by_cells, cells, full_polygon, 0.90), 1U);
+    EXPECT_EQ(swaths_by_cells.sizeTotal(), 2U);
+}
+
+TEST(BoundaryFill, KeepsOneSeamFillForARealTwoSidedGap)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Cells cells;
+    cells.addGeometry(makeRectangle(0.0, 0.0, 10.0, 4.0));
+    cells.addGeometry(makeRectangle(0.0, 4.0, 10.0, 8.0));
+
+    f2c::types::Swaths lower;
+    lower.push_back(makeSwath(0.15, 3.40, 9.85, 3.40, 0.90));
+    f2c::types::Swaths upper;
+    upper.push_back(makeSwath(0.0, 4.0, 10.0, 4.0, 0.90));
+    upper.push_back(makeSwath(0.15, 4.60, 9.85, 4.60, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {lower, upper};
+
+    EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
+        swaths_by_cells, cells, full_polygon, 0.90), 0U);
+    EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
+}
+
+TEST(BoundaryFill, KeepsOnlyOneCopyOfASharedSeamFill)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Cells cells;
+    cells.addGeometry(makeRectangle(0.0, 0.0, 10.0, 4.0));
+    cells.addGeometry(makeRectangle(0.0, 4.0, 10.0, 8.0));
+
+    f2c::types::Swaths lower;
+    lower.push_back(makeSwath(0.15, 3.40, 9.85, 3.40, 0.90));
+    lower.push_back(makeSwath(0.0, 4.0, 10.0, 4.0, 0.90));
+    f2c::types::Swaths upper;
+    upper.push_back(makeSwath(10.0, 4.0, 0.0, 4.0, 0.90));
+    upper.push_back(makeSwath(0.15, 4.60, 9.85, 4.60, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {lower, upper};
+
+    EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
+        swaths_by_cells, cells, full_polygon, 0.90), 1U);
+    EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
+}
+
+TEST(BoundaryFill, KeepsSeamFillWhenOppositeSwathsCoverDifferentIntervals)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Cells cells;
+    cells.addGeometry(makeRectangle(0.0, 0.0, 10.0, 4.0));
+    cells.addGeometry(makeRectangle(0.0, 4.0, 10.0, 8.0));
+
+    f2c::types::Swaths lower;
+    lower.push_back(makeSwath(0.0, 3.55, 4.0, 3.55, 0.90));
+    f2c::types::Swaths upper;
+    upper.push_back(makeSwath(0.0, 4.0, 10.0, 4.0, 0.90));
+    upper.push_back(makeSwath(6.0, 4.48, 10.0, 4.48, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {lower, upper};
+
+    EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
+        swaths_by_cells, cells, full_polygon, 0.90), 0U);
+    EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
+}
+
+TEST(BoundaryFill, KeepsSeamFillWhenCommonCoverageMissesOneEndpoint)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Cells cells;
+    cells.addGeometry(makeRectangle(0.0, 0.0, 10.0, 4.0));
+    cells.addGeometry(makeRectangle(0.0, 4.0, 10.0, 8.0));
+
+    f2c::types::Swaths lower;
+    lower.push_back(makeSwath(0.0, 3.55, 9.1, 3.55, 0.90));
+    f2c::types::Swaths upper;
+    upper.push_back(makeSwath(0.0, 4.0, 10.0, 4.0, 0.90));
+    upper.push_back(makeSwath(0.0, 4.48, 9.1, 4.48, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {lower, upper};
+
+    EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
+        swaths_by_cells, cells, full_polygon, 0.90), 0U);
+    EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
+}
+
 TEST(RouteInvariant, AppendedBoundarySwathStartsANewConnectedGroup)
 {
     f2c::types::Route route;
@@ -80,6 +203,79 @@ TEST(RouteInvariant, AppendedBoundarySwathStartsANewConnectedGroup)
     ASSERT_EQ(route.getConnection(1).size(), 2U);
     EXPECT_DOUBLE_EQ(route.getConnection(1).getGeometry(0).getX(), 4.0);
     EXPECT_DOUBLE_EQ(route.getSwaths(1).at(0).startPoint().getY(), 1.0);
+}
+
+TEST(RouteInvariant, SynchronizesConnectionAfterSwathEndpointAdjustment)
+{
+    f2c::types::Route route;
+    f2c::types::Swaths first_group;
+    first_group.push_back(makeSwath(0.0, 0.0, 10.0, 0.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first_group);
+
+    f2c::types::MultiPoint connection;
+    connection.addPoint(f2c::types::Point(10.0, 0.0));
+    connection.addPoint(f2c::types::Point(10.5, 0.5));
+    connection.addPoint(f2c::types::Point(10.0, 1.0));
+    f2c::types::Swaths second_group;
+    second_group.push_back(makeSwath(10.0, 1.0, 0.0, 1.0));
+    route.addConnectedSwaths(connection, second_group);
+
+    f2c::types::Swaths adjusted_first;
+    adjusted_first.push_back(makeSwath(0.1, 0.0, 9.9, 0.0));
+    f2c::types::Swaths adjusted_second;
+    adjusted_second.push_back(makeSwath(9.9, 1.0, 0.1, 1.0));
+    route.setSwaths(0, adjusted_first);
+    route.setSwaths(1, adjusted_second);
+
+    EXPECT_EQ(yingshi::synchronizeRouteConnectionEndpoints(route, 0.2), 1U);
+    const auto& synchronized = route.getConnection(1);
+    ASSERT_EQ(synchronized.size(), 3U);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(0).getX(), 9.9);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(0).getY(), 0.0);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(1).getX(), 10.5);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(1).getY(), 0.5);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(2).getX(), 9.9);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(2).getY(), 1.0);
+}
+
+TEST(RouteInvariant, DropsSingleStaleEndpointAfterSwathAdjustment)
+{
+    f2c::types::Route route;
+    f2c::types::Swaths first_group;
+    first_group.push_back(makeSwath(0.0, 0.0, 9.94, 0.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first_group);
+
+    f2c::types::MultiPoint stale_endpoint;
+    stale_endpoint.addPoint(f2c::types::Point(10.0, 0.0));
+    f2c::types::Swaths second_group;
+    second_group.push_back(makeSwath(9.85, 0.0, 9.85, 1.0));
+    route.addConnectedSwaths(stale_endpoint, second_group);
+
+    EXPECT_EQ(yingshi::synchronizeRouteConnectionEndpoints(route, 0.06), 1U);
+    const auto& synchronized = route.getConnection(1);
+    ASSERT_EQ(synchronized.size(), 2U);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(0).getX(), 9.94);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(1).getX(), 9.85);
+}
+
+TEST(RouteInvariant, PreservesSingleDistantDetourWaypoint)
+{
+    f2c::types::Route route;
+    f2c::types::Swaths first_group;
+    first_group.push_back(makeSwath(0.0, 0.0, 9.94, 0.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first_group);
+
+    f2c::types::MultiPoint detour;
+    detour.addPoint(f2c::types::Point(11.0, 1.0));
+    f2c::types::Swaths second_group;
+    second_group.push_back(makeSwath(9.85, 0.0, 9.85, 1.0));
+    route.addConnectedSwaths(detour, second_group);
+
+    EXPECT_EQ(yingshi::synchronizeRouteConnectionEndpoints(route, 0.06), 1U);
+    const auto& synchronized = route.getConnection(1);
+    ASSERT_EQ(synchronized.size(), 3U);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(1).getX(), 11.0);
+    EXPECT_DOUBLE_EQ(synchronized.getGeometry(1).getY(), 1.0);
 }
 
 TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)

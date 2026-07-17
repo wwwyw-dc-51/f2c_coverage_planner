@@ -202,6 +202,62 @@ void fillBoundaryGaps(
                     seg.getGeometry(1).getY() - seg.getGeometry(0).getY());
                 if (seg_len < cov_width * 0.5) continue;
 
+                // 已有 swath 若能覆盖这段物理边界，就不再额外铺一条贴边线。
+                // 判断针对真实边界而非候选补线中心，避免 S3 底边这类
+                // 已覆盖区域出现局部加密轨迹。
+                bool boundary_already_covered = false;
+                const double edge_ux = edx / elen;
+                const double edge_uy = edy / elen;
+                const double seg_along_1 =
+                    (seg.getGeometry(0).getX() - px1) * edge_ux +
+                    (seg.getGeometry(0).getY() - py1) * edge_uy;
+                const double seg_along_2 =
+                    (seg.getGeometry(1).getX() - px1) * edge_ux +
+                    (seg.getGeometry(1).getY() - py1) * edge_uy;
+                const double seg_along_min = std::min(seg_along_1, seg_along_2);
+                const double seg_along_max = std::max(seg_along_1, seg_along_2);
+                for (size_t si = 0; si < cell_swaths.size(); ++si) {
+                    const auto& swath = cell_swaths.at(si);
+                    const double sx1 = swath.startPoint().getX();
+                    const double sy1 = swath.startPoint().getY();
+                    const double sx2 = swath.endPoint().getX();
+                    const double sy2 = swath.endPoint().getY();
+                    const double swath_len = std::hypot(sx2 - sx1, sy2 - sy1);
+                    if (swath_len < 1e-9) continue;
+                    const double parallel = std::abs(
+                        (sx2 - sx1) * edge_ux +
+                        (sy2 - sy1) * edge_uy) / swath_len;
+                    if (parallel < angle_tol) continue;
+
+                    const auto normalDistance = [&](double x, double y) {
+                        return std::abs(
+                            (x - px1) * (-edge_uy) +
+                            (y - py1) * edge_ux);
+                    };
+                    const double max_normal_distance = std::max({
+                        normalDistance(sx1, sy1),
+                        normalDistance(sx2, sy2),
+                        normalDistance(
+                            0.5 * (sx1 + sx2),
+                            0.5 * (sy1 + sy2))});
+                    if (max_normal_distance > boundary_offset + 1e-6) continue;
+
+                    const double swath_along_1 =
+                        (sx1 - px1) * edge_ux + (sy1 - py1) * edge_uy;
+                    const double swath_along_2 =
+                        (sx2 - px1) * edge_ux + (sy2 - py1) * edge_uy;
+                    const double overlap = std::min(
+                        seg_along_max, std::max(swath_along_1, swath_along_2)) -
+                        std::max(
+                            seg_along_min,
+                            std::min(swath_along_1, swath_along_2));
+                    if (overlap >= seg_len - cov_width - 1e-6) {
+                        boundary_already_covered = true;
+                        break;
+                    }
+                }
+                if (boundary_already_covered) continue;
+
                 f2c::types::Swath fill_sw(seg, cov_width);
 
                 // 判断填充在出发侧还是到达侧
@@ -467,6 +523,293 @@ void fillBoundaryGaps(
             }
         }
     }
+}
+
+size_t pruneRedundantCellSeamFills(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const f2c::types::Cells& cells,
+    const f2c::types::Cell& full_polygon,
+    double cov_width,
+    double gap_tolerance_ratio)
+{
+    if (swaths_by_cells.sizeTotal() == 0 || cells.size() == 0 ||
+        cov_width <= 0.0) {
+        return 0;
+    }
+
+    struct SwathGeometry {
+        size_t group_idx;
+        size_t swath_idx;
+        double x1;
+        double y1;
+        double x2;
+        double y2;
+        double length;
+        bool seam_candidate {false};
+    };
+
+    std::vector<SwathGeometry> geometries;
+    for (size_t group_idx = 0; group_idx < swaths_by_cells.size(); ++group_idx) {
+        const auto& group = swaths_by_cells.at(group_idx);
+        for (size_t swath_idx = 0; swath_idx < group.size(); ++swath_idx) {
+            const auto& swath = group.at(swath_idx);
+            const double x1 = swath.startPoint().getX();
+            const double y1 = swath.startPoint().getY();
+            const double x2 = swath.endPoint().getX();
+            const double y2 = swath.endPoint().getY();
+            geometries.push_back({
+                group_idx, swath_idx, x1, y1, x2, y2,
+                std::hypot(x2 - x1, y2 - y1), false});
+        }
+    }
+
+    const auto& outer_ring = full_polygon.getExteriorRing();
+    auto pointInTargetArea = [&](double x, double y) {
+        if (!pointInPolygon(x, y, outer_ring)) return false;
+        for (size_t hi = 0; hi + 1 < full_polygon.size(); ++hi) {
+            if (pointInPolygon(x, y, full_polygon.getInteriorRing(hi))) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    constexpr double kGeometryTolerance = 1e-5;
+    const double sample_step = std::min(0.05, cov_width * 0.1);
+    for (auto& geometry : geometries) {
+        if (geometry.length < cov_width * 0.5) continue;
+        const double swath_dx = (geometry.x2 - geometry.x1) / geometry.length;
+        const double swath_dy = (geometry.y2 - geometry.y1) / geometry.length;
+        const double swath_mid_x = 0.5 * (geometry.x1 + geometry.x2);
+        const double swath_mid_y = 0.5 * (geometry.y1 + geometry.y2);
+
+        for (size_t cell_idx = 0;
+             cell_idx < cells.size() && !geometry.seam_candidate; ++cell_idx) {
+            const auto& ring = cells.getGeometry(cell_idx).getExteriorRing();
+            for (size_t edge_idx = 0; edge_idx + 1 < ring.size(); ++edge_idx) {
+                const double ex1 = ring.getGeometry(edge_idx).getX();
+                const double ey1 = ring.getGeometry(edge_idx).getY();
+                const double ex2 = ring.getGeometry(edge_idx + 1).getX();
+                const double ey2 = ring.getGeometry(edge_idx + 1).getY();
+                const double edge_len = std::hypot(ex2 - ex1, ey2 - ey1);
+                if (edge_len < cov_width * 0.5) continue;
+                const double edge_dx = (ex2 - ex1) / edge_len;
+                const double edge_dy = (ey2 - ey1) / edge_len;
+                if (std::abs(swath_dx * edge_dx + swath_dy * edge_dy) < 0.999) {
+                    continue;
+                }
+
+                const double line_distance = std::abs(
+                    (swath_mid_x - ex1) * (-edge_dy) +
+                    (swath_mid_y - ey1) * edge_dx);
+                if (line_distance > kGeometryTolerance) continue;
+
+                const double swath_along_1 =
+                    (geometry.x1 - ex1) * edge_dx +
+                    (geometry.y1 - ey1) * edge_dy;
+                const double swath_along_2 =
+                    (geometry.x2 - ex1) * edge_dx +
+                    (geometry.y2 - ey1) * edge_dy;
+                const double overlap = std::min(
+                    edge_len, std::max(swath_along_1, swath_along_2)) -
+                    std::max(0.0, std::min(swath_along_1, swath_along_2));
+                if (overlap < cov_width * 0.5) continue;
+
+                const double edge_mid_x = 0.5 * (ex1 + ex2);
+                const double edge_mid_y = 0.5 * (ey1 + ey2);
+                const double normal_x = -edge_dy;
+                const double normal_y = edge_dx;
+                if (pointInTargetArea(
+                        edge_mid_x + normal_x * sample_step,
+                        edge_mid_y + normal_y * sample_step) &&
+                    pointInTargetArea(
+                        edge_mid_x - normal_x * sample_step,
+                        edge_mid_y - normal_y * sample_step)) {
+                    geometry.seam_candidate = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::vector<std::vector<bool>> remove(swaths_by_cells.size());
+    for (size_t group_idx = 0; group_idx < swaths_by_cells.size(); ++group_idx) {
+        remove[group_idx].assign(swaths_by_cells.at(group_idx).size(), false);
+    }
+
+    const double allowed_gap =
+        cov_width * (1.0 + std::max(0.0, gap_tolerance_ratio));
+    for (size_t candidate_idx = 0;
+         candidate_idx < geometries.size(); ++candidate_idx) {
+        const auto& candidate = geometries[candidate_idx];
+        if (!candidate.seam_candidate) continue;
+
+        // 完全相同的共享接缝只保留第一次出现的一条。
+        bool duplicate = false;
+        for (size_t previous_idx = 0;
+             previous_idx < candidate_idx; ++previous_idx) {
+            const auto& previous = geometries[previous_idx];
+            if (!previous.seam_candidate) continue;
+            const double direct =
+                std::hypot(candidate.x1 - previous.x1,
+                           candidate.y1 - previous.y1) +
+                std::hypot(candidate.x2 - previous.x2,
+                           candidate.y2 - previous.y2);
+            const double reversed =
+                std::hypot(candidate.x1 - previous.x2,
+                           candidate.y1 - previous.y2) +
+                std::hypot(candidate.x2 - previous.x1,
+                           candidate.y2 - previous.y1);
+            if (std::min(direct, reversed) <= 2.0 * kGeometryTolerance) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            remove[candidate.group_idx][candidate.swath_idx] = true;
+            continue;
+        }
+
+        const double dir_x = (candidate.x2 - candidate.x1) / candidate.length;
+        const double dir_y = (candidate.y2 - candidate.y1) / candidate.length;
+        const double normal_x = -dir_y;
+        const double normal_y = dir_x;
+        const double origin_x = 0.5 * (candidate.x1 + candidate.x2);
+        const double origin_y = 0.5 * (candidate.y1 + candidate.y2);
+        struct NeighborInterval {
+            double along_min;
+            double along_max;
+            double distance_at_min;
+            double distance_at_max;
+        };
+        std::vector<NeighborInterval> negative_neighbors;
+        std::vector<NeighborInterval> positive_neighbors;
+
+        for (const auto& other : geometries) {
+            if (other.seam_candidate || other.length < 1e-9) continue;
+            const double other_dir_x = (other.x2 - other.x1) / other.length;
+            const double other_dir_y = (other.y2 - other.y1) / other.length;
+            if (std::abs(dir_x * other_dir_x + dir_y * other_dir_y) <
+                0.999999) {
+                continue;
+            }
+
+            const double other_along_1 =
+                (other.x1 - origin_x) * dir_x +
+                (other.y1 - origin_y) * dir_y;
+            const double other_along_2 =
+                (other.x2 - origin_x) * dir_x +
+                (other.y2 - origin_y) * dir_y;
+            const double other_distance_1 =
+                (other.x1 - origin_x) * normal_x +
+                (other.y1 - origin_y) * normal_y;
+            const double other_distance_2 =
+                (other.x2 - origin_x) * normal_x +
+                (other.y2 - origin_y) * normal_y;
+            const bool forward_along = other_along_1 <= other_along_2;
+            const double raw_along_min =
+                std::min(other_along_1, other_along_2);
+            const double raw_along_max =
+                std::max(other_along_1, other_along_2);
+            const double raw_distance_at_min =
+                forward_along ? other_distance_1 : other_distance_2;
+            const double raw_distance_at_max =
+                forward_along ? other_distance_2 : other_distance_1;
+            const double clipped_along_min = std::max(
+                -candidate.length * 0.5,
+                raw_along_min);
+            const double clipped_along_max = std::min(
+                candidate.length * 0.5,
+                raw_along_max);
+            const double overlap = clipped_along_max - clipped_along_min;
+            if (overlap < std::min(cov_width * 0.5, candidate.length * 0.25)) {
+                continue;
+            }
+
+            const auto distanceAt = [&](double along) {
+                if (raw_along_max - raw_along_min < 1e-12) {
+                    return 0.5 * (
+                        raw_distance_at_min + raw_distance_at_max);
+                }
+                const double ratio =
+                    (along - raw_along_min) /
+                    (raw_along_max - raw_along_min);
+                return raw_distance_at_min + ratio *
+                    (raw_distance_at_max - raw_distance_at_min);
+            };
+            const double distance_at_min = distanceAt(clipped_along_min);
+            const double distance_at_max = distanceAt(clipped_along_max);
+            if (std::max(distance_at_min, distance_at_max) <
+                -kGeometryTolerance) {
+                negative_neighbors.push_back({
+                    clipped_along_min, clipped_along_max,
+                    distance_at_min, distance_at_max});
+            } else if (std::min(distance_at_min, distance_at_max) >
+                       kGeometryTolerance) {
+                positive_neighbors.push_back({
+                    clipped_along_min, clipped_along_max,
+                    distance_at_min, distance_at_max});
+            }
+        }
+
+        const auto interpolateDistance = [](
+            const NeighborInterval& neighbor, double along) {
+            if (neighbor.along_max - neighbor.along_min < 1e-12) {
+                return 0.5 * (
+                    neighbor.distance_at_min + neighbor.distance_at_max);
+            }
+            const double ratio =
+                (along - neighbor.along_min) /
+                (neighbor.along_max - neighbor.along_min);
+            return neighbor.distance_at_min + ratio *
+                (neighbor.distance_at_max - neighbor.distance_at_min);
+        };
+        const double endpoint_margin =
+            std::min(cov_width * 0.5, candidate.length * 0.5);
+        const double required_min =
+            -candidate.length * 0.5 + endpoint_margin;
+        const double required_max =
+            candidate.length * 0.5 - endpoint_margin;
+        for (const auto& negative : negative_neighbors) {
+            for (const auto& positive : positive_neighbors) {
+                const double common_min =
+                    std::max(negative.along_min, positive.along_min);
+                const double common_max =
+                    std::min(negative.along_max, positive.along_max);
+                if (common_min > required_min + 1e-6 ||
+                    common_max < required_max - 1e-6) {
+                    continue;
+                }
+                const double gap_at_min =
+                    interpolateDistance(positive, required_min) -
+                    interpolateDistance(negative, required_min);
+                const double gap_at_max =
+                    interpolateDistance(positive, required_max) -
+                    interpolateDistance(negative, required_max);
+                if (std::max(gap_at_min, gap_at_max) <=
+                    allowed_gap + 1e-6) {
+                    remove[candidate.group_idx][candidate.swath_idx] = true;
+                    break;
+                }
+            }
+            if (remove[candidate.group_idx][candidate.swath_idx]) break;
+        }
+    }
+
+    size_t removed_count = 0;
+    for (size_t group_idx = 0; group_idx < swaths_by_cells.size(); ++group_idx) {
+        f2c::types::Swaths filtered;
+        const auto& group = swaths_by_cells.at(group_idx);
+        for (size_t swath_idx = 0; swath_idx < group.size(); ++swath_idx) {
+            if (remove[group_idx][swath_idx]) {
+                ++removed_count;
+            } else {
+                filtered.push_back(group.at(swath_idx));
+            }
+        }
+        swaths_by_cells.at(group_idx) = filtered;
+    }
+    return removed_count;
 }
 
 }  // namespace yingshi
