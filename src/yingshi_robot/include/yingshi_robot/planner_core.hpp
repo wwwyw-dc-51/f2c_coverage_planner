@@ -92,6 +92,22 @@ struct PlanningResult {
 };
 
 // ========== 规划核心门面 ==========
+//
+// 当前状态（2026-07-17）：接口完整，实现部分完成。
+//
+// 已实现：headland 生成、rectilinear 分解、swath 生成+填补、贪心排序、
+//         genRoute/Snake 路由、direct 路径规划、孔洞连接修复
+//
+// 待补齐（按优先级）：
+//   1. 孔洞作为 polygon 内环传入（当前只放在 req.holes 里）
+//   2. no_hl secondary erosion
+//   3. swath_angle_optimization 多角度候选
+//   4. turn_planner_type 非 direct 模式
+//   5. boundary_coverage_margin 逐端点调整
+//   6. sweep_align_angle + 自适应 headland ratio
+//
+// use_planner_core_ 默认 false；补齐上述各项并通过独立集成测试后
+// 再切为 true、删除旧管线。
 class PlannerCore {
 public:
     PlannerCore() = default;

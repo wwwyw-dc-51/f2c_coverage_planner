@@ -474,6 +474,17 @@ private:
             publishEmptyPlanningOutputs(index);
         }
 
+        // 清除 RViz 中的旧 marker（掉头标记等）
+        {
+            visualization_msgs::msg::Marker clear;
+            clear.header.frame_id = "map";
+            clear.header.stamp = this->now();
+            clear.ns = "infeasible_turns";
+            clear.id = 0;
+            clear.action = visualization_msgs::msg::Marker::DELETE;
+            infeasible_turn_pubs_[index]->publish(clear);
+        }
+
         RCLCPP_INFO(this->get_logger(),
                     "Cleared cached planning outputs for polygon_%d", index + 1);
     }
@@ -797,11 +808,9 @@ private:
                 path_pubs_[i]->publish(last_paths_[i]);
             }
             if (!last_swath_points_[i].poses.empty()) {
-                last_swath_points_[i].header.stamp = this->now();
                 swath_points_pubs_[i]->publish(last_swath_points_[i]);
             }
             if (!last_sampled_points_[i].poses.empty()) {
-                last_sampled_points_[i].header.stamp = this->now();
                 sampled_path_pubs_[i]->publish(last_sampled_points_[i]);
             }
             if (last_polygons_[i].points.size() > 0) {
@@ -809,25 +818,12 @@ private:
                 polygon_viz_pubs_[i]->publish(outline);
             }
             if (!last_holes_outlines_[i].poses.empty()) {
-                last_holes_outlines_[i].header.stamp = this->now();
                 holes_outline_pubs_[i]->publish(last_holes_outlines_[i]);
             }
             if (!last_decomposition_outlines_[i].poses.empty()) {
-                last_decomposition_outlines_[i].header.stamp = this->now();
                 decomposition_outline_pubs_[i]->publish(last_decomposition_outlines_[i]);
             }
-            // 重新发布不可执行掉头标记
-            if (last_infeasible_turn_markers_[i].points.empty()) {
-                // 无不可执行掉头，发布清除标记
-                visualization_msgs::msg::Marker clear;
-                clear.header.frame_id = "map";
-                clear.header.stamp = this->now();
-                clear.ns = "infeasible_turns";
-                clear.id = 0;
-                clear.action = visualization_msgs::msg::Marker::DELETE;
-                infeasible_turn_pubs_[i]->publish(clear);
-            } else {
-                last_infeasible_turn_markers_[i].header.stamp = this->now();
+            if (!last_infeasible_turn_markers_[i].points.empty()) {
                 infeasible_turn_pubs_[i]->publish(last_infeasible_turn_markers_[i]);
             }
         }

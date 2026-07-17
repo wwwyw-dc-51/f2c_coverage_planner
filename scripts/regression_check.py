@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-F2C 回归检查脚本 — 对比批测结果与黄金基线。
+F2C regression check — compare batch results against golden baseline.
 
-用法:
+Usage:
   python scripts/regression_check.py <test_dir> [golden_dir]
-
-示例:
-  python scripts/regression_check.py test_results/batch_0717_1310
-  python scripts/regression_check.py test_results/batch_NEW test/golden/batch_0717_1310
-
-默认 golden 目录为 test/golden/batch_0717_1310。
-
-检查项:
-  - 覆盖率: 允许下降 ≤0.15%
-  - 得分:   允许下降 ≤2.0
-  - 转弯数: 允许增加 ≤3
-  - 重叠率: 绝对增加 ≤5.0 个百分点
-  - 路径长: 相对增加 ≤10%
-  - 未覆盖面积 (uncovered): 绝对增加 ≤0.50 m²
-
-退出码: 0 = 全部通过, 1 = 有场景回退。
 """
+import sys
+import io
+
+# Windows GBK consoles cannot render Unicode checkmarks.
+# Force UTF-8 on all platforms; wrap stdout for safety.
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = io.TextIOWrapper(
+        sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+# Default golden dir, tolerances, exit codes documented in --help / main() docstring.
 
 import json
 import os
