@@ -56,6 +56,18 @@ target_include_directories(coverage_planner_core PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
+# ── 离线测评接口：评分/网格报告不得成为规划核心的依赖 ──
+add_library(coverage_planner_evaluation INTERFACE)
+add_library(${PROJECT_NAME}::coverage_planner_evaluation ALIAS
+  coverage_planner_evaluation)
+target_link_libraries(coverage_planner_evaluation INTERFACE
+  Fields2Cover::Fields2Cover
+)
+target_include_directories(coverage_planner_evaluation INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+)
+
 # ── ROS 适配层：消息转换、参数和发布 ──
 add_executable(polygon_planner_node
   src/polygon_planner_node.cpp
@@ -70,6 +82,7 @@ ament_target_dependencies(polygon_planner_node
 )
 target_link_libraries(polygon_planner_node
   coverage_planner_core
+  coverage_planner_evaluation
   ortools::ortools
 )
 target_include_directories(polygon_planner_node PRIVATE
@@ -83,11 +96,7 @@ if(BUILD_TESTING)
     test/path_geometry_test.cpp
   )
   target_link_libraries(path_geometry_test
-    Fields2Cover::Fields2Cover
-  )
-  target_include_directories(path_geometry_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    coverage_planner_evaluation
   )
 
   ament_add_gtest(decomposer_test
@@ -114,11 +123,7 @@ if(BUILD_TESTING)
     test/coverage_evaluator_test.cpp
   )
   target_link_libraries(coverage_evaluator_test
-    Fields2Cover::Fields2Cover
-  )
-  target_include_directories(coverage_evaluator_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    coverage_planner_evaluation
   )
 
   ament_add_gtest(planner_config_test
