@@ -63,4 +63,18 @@ bool segmentCrossesHole(double x0, double y0, double x1, double y1,
                         const std::vector<f2c::types::LinearRing>& hole_rings,
                         int num_samples = 10);
 
+// ========== 边界策略：对 Route 中全部 swath 应用边界缩进/延伸 ==========
+// 根据 boundary_type 决定 margin：
+//   "closed" → 使用 shrink_margin（正值=向内收缩）
+//   "open"   → 使用 boundary_coverage_margin（负值=向外延伸）
+//   "custom" → 直接使用 boundary_coverage_margin
+// 对每个 swath 端点独立判断外环/孔洞净空后调整，
+// 并同步 route connection 端点。返回调整的 swath 组数。
+size_t applyBoundaryMarginToRoute(
+    f2c::types::Route& route,
+    const f2c::types::LinearRing& outer_ring,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double coverage_width,
+    double margin);
+
 }  // namespace yingshi

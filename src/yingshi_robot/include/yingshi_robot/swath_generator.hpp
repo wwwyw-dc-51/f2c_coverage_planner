@@ -54,4 +54,19 @@ f2c::types::Swaths optimizeSwathAngle(
     double cov_width,
     const std::vector<double>& angle_candidates);
 
+// ========== 全 Cell Swath 生成（全局角度优化 + 边界填补）==========
+// 这是从 ROS 节点提取的纯算法函数，无 ROS 依赖。
+// 参数 swath_angle_optimization 为 true 时做全局扫描：测试所有候选角度，
+// 选总 swath 数最少的统一角度；否则逐 cell 独立优化。
+// 返回按 cell 分组的 swaths（已 fillBoundaryGaps + filterShortSwaths）。
+f2c::types::SwathsByCells generateSwathsForAllCells(
+    const f2c::types::Cells& no_hl,
+    const f2c::types::Cell& full_polygon,
+    double r_w,
+    double coverage_width,
+    double swath_endpoint_shrink_distance,
+    double min_swath_length,
+    bool swath_angle_optimization,
+    const std::vector<double>& swath_angle_candidates);
+
 }  // namespace yingshi

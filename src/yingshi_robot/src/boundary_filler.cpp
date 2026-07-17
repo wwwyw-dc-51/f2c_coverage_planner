@@ -952,4 +952,32 @@ size_t pruneRedundantCellSeamFills(
     return removed_count;
 }
 
+// ========== 边界策略：对 Route 中全部 swath 应用边界缩进/延伸 ==========
+// 从 ROS 节点 planCoveragePath 提取。对每个 swath 端点独立判断
+// 外环/孔洞净空后调整，确保边界策略一致。
+size_t applyBoundaryMarginToRoute(
+    f2c::types::Route& route,
+    const f2c::types::LinearRing& outer_ring,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double coverage_width,
+    double margin)
+{
+    if (std::abs(margin) < 1e-9) return 0;
+
+    size_t adjusted = 0;
+    for (size_t i = 0; i < route.sizeVectorSwaths(); ++i) {
+        f2c::types::Swaths& route_swaths = route.getSwaths(i);
+        f2c::types::Swaths adjusted_swaths;
+        for (size_t j = 0; j < route_swaths.size(); ++j) {
+            adjusted_swaths.push_back(
+                adjustSwathEndpointsForBoundaryClearance(
+                    route_swaths.at(j), outer_ring, hole_rings,
+                    coverage_width, margin));
+        }
+        route.setSwaths(i, adjusted_swaths);
+        ++adjusted;
+    }
+    return adjusted;
+}
+
 }  // namespace yingshi

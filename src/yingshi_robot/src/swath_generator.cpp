@@ -7,6 +7,7 @@
 
 #include "yingshi_robot/swath_generator.hpp"
 #include "yingshi_robot/decomposer.hpp"
+#include "yingshi_robot/boundary_filler.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -269,6 +270,100 @@ f2c::types::Swaths optimizeSwathAngle(
     }
 
     return best_swaths;
+}
+
+// ========== 全 Cell Swath 生成 ==========
+// 从 ROS 节点 planCoveragePath 提取的纯算法函数。
+// 全局角度优化：测试所有候选角度，选总 swath 数最少的，所有 cell 用同一角度。
+// 非全局时：逐 cell 独立 computeCellMainDirection + optimizeSwathAngle。
+f2c::types::SwathsByCells generateSwathsForAllCells(
+    const f2c::types::Cells& no_hl,
+    const f2c::types::Cell& full_polygon,
+    double r_w,
+    double coverage_width,
+    double swath_endpoint_shrink_distance,
+    double min_swath_length,
+    bool swath_angle_optimization,
+    const std::vector<double>& swath_angle_candidates)
+{
+    f2c::sg::BruteForce swath_gen;
+    swath_gen.setAllowOverlap(true);
+    f2c::types::SwathsByCells swaths_by_cells;
+
+    if (swath_angle_optimization) {
+        // ★ 全局优化：对所有 cell 测试同一角度，选总 swath 数最少的
+        std::vector<double> cands = swath_angle_candidates;
+        // 收集所有 cell 的边缘角度（全局候选）
+        for (size_t ci = 0; ci < no_hl.size(); ++ci) {
+            auto edge_cands = extractEdgeAngles(no_hl.getGeometry(ci), 2.0);
+            cands.insert(cands.end(), edge_cands.begin(), edge_cands.end());
+        }
+        // 去重
+        std::sort(cands.begin(), cands.end());
+        cands.erase(std::unique(cands.begin(), cands.end(),
+            [](double a, double b) { return std::abs(a-b) < 1e-4; }),
+            cands.end());
+
+        if (!cands.empty()) {
+            size_t best_total = std::numeric_limits<size_t>::max();
+            double best_ang = 0.0;
+            std::vector<f2c::types::Swaths> best_cell_swaths;
+            best_cell_swaths.reserve(no_hl.size());
+
+            for (double ang : cands) {
+                size_t total = 0;
+                std::vector<f2c::types::Swaths> cell_swaths;
+                cell_swaths.reserve(no_hl.size());
+                for (size_t ci = 0; ci < no_hl.size(); ++ci) {
+                    auto cs = swath_gen.generateSwaths(ang, r_w,
+                        no_hl.getGeometry(ci));
+                    total += cs.size();
+                    cell_swaths.push_back(std::move(cs));
+                }
+                if (total > 0 && total < best_total) {
+                    best_total = total;
+                    best_ang = ang;
+                    best_cell_swaths = std::move(cell_swaths);
+                }
+            }
+
+            // 用最优全局角度生成 swaths + 边界间隙补填
+            for (size_t ci = 0; ci < best_cell_swaths.size(); ++ci) {
+                auto& cell_swaths = best_cell_swaths[ci];
+                size_t rm = 0;
+                f2c::types::Swaths cs = filterShortSwaths(
+                    cell_swaths, min_swath_length, rm);
+                fillBoundaryGaps(cs, no_hl.getGeometry(ci), full_polygon,
+                                 best_ang, r_w, swath_endpoint_shrink_distance);
+                if (cs.size() > 0) swaths_by_cells.push_back(cs);
+            }
+        }
+    }
+
+    // 全局优化未生效时，走逐 cell 独立优化路径
+    if (swaths_by_cells.sizeTotal() == 0) {
+        for (size_t ci = 0; ci < no_hl.size(); ++ci) {
+            const auto& sub = no_hl.getGeometry(ci);
+            double ang = computeCellMainDirection(sub);
+
+            f2c::types::Swaths cs;
+            if (swath_angle_optimization) {
+                auto cands = extractEdgeAngles(sub, 2.0);
+                for (double a : swath_angle_candidates) cands.push_back(a);
+                cands.push_back(ang);
+                cs = optimizeSwathAngle(sub, swath_gen, r_w, cands);
+            } else {
+                cs = swath_gen.generateSwaths(ang, r_w, sub);
+            }
+            size_t rm = 0;
+            cs = filterShortSwaths(cs, min_swath_length, rm);
+            fillBoundaryGaps(cs, sub, full_polygon, ang,
+                             r_w, swath_endpoint_shrink_distance);
+            if (cs.size() > 0) swaths_by_cells.push_back(cs);
+        }
+    }
+
+    return swaths_by_cells;
 }
 
 }  // namespace yingshi

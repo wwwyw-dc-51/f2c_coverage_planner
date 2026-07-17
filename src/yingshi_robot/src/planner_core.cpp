@@ -46,28 +46,6 @@ f2c::types::Robot makeRobot(const PlanningRequest& req)
     return robot;
 }
 
-// ── 为单个 cell 生成 swaths ──
-void generateSwathsForCell(
-    const f2c::types::Cell& cell,
-    const f2c::types::Cell& full_polygon,
-    const PlanningRequest& req,
-    double r_w,
-    f2c::sg::BruteForce& swath_gen,
-    f2c::types::SwathsByCells& out)
-{
-    double ang = computeCellMainDirection(cell);
-    auto swaths = swath_gen.generateSwaths(ang, r_w, cell);
-
-    size_t removed = 0;
-    swaths = filterShortSwaths(swaths, req.min_swath_length, removed);
-
-    fillBoundaryGaps(swaths, cell, full_polygon, ang,
-                     req.coverage_width,
-                     req.swath_endpoint_shrink_distance);
-
-    if (swaths.size() > 0) out.push_back(swaths);
-}
-
 // ── Snake 模式直连路由 ──
 f2c::types::Route buildSnakeRoute(
     const f2c::types::SwathsByCells& swaths_by_cells,
@@ -183,39 +161,12 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
             return result;
         }
 
-        // ── 3. 生成 swaths（逐 cell）──
-        f2c::sg::BruteForce swath_gen;
-        swath_gen.setAllowOverlap(true);  // 允许边界补线与已有 swath 微重叠
-        f2c::types::SwathsByCells swaths_by_cells;
-
-        // 若启用角度优化，提取候选角度列表
-        std::vector<double> angle_candidates = req.swath_angle_candidates;
-        if (req.swath_angle_optimization && angle_candidates.empty()) {
-            angle_candidates = extractEdgeAngles(req.polygon, 2.0);
-        }
-
-        for (size_t ci = 0; ci < no_hl.size(); ++ci) {
-            const auto& cell = no_hl.getGeometry(ci);
-
-            // 确定 swath 角度
-            double ang = computeCellMainDirection(cell);
-            if (req.swath_angle_optimization && !angle_candidates.empty()) {
-                // 多角度候选：选 swath 数最少的
-                auto best = optimizeSwathAngle(
-                    cell, swath_gen, r_w, angle_candidates);
-                if (best.size() > 0) {
-                    fillBoundaryGaps(best, cell, req.polygon, ang,
-                                     req.coverage_width,
-                                     req.swath_endpoint_shrink_distance);
-                    if (best.size() > 0) swaths_by_cells.push_back(best);
-                    continue;
-                }
-            }
-
-            generateSwathsForCell(
-                cell, req.polygon, req, r_w,
-                swath_gen, swaths_by_cells);
-        }
+        // ── 3. 生成 swaths（全局角度优化 + 边界填补）──
+        f2c::types::SwathsByCells swaths_by_cells =
+            generateSwathsForAllCells(
+                no_hl, req.polygon, r_w, req.coverage_width,
+                req.swath_endpoint_shrink_distance, req.min_swath_length,
+                req.swath_angle_optimization, req.swath_angle_candidates);
 
         if (swaths_by_cells.sizeTotal() == 0) {
             result.error_message = "No swaths generated";
@@ -224,7 +175,7 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
 
         // ── 4. 去重接缝补线 ──
         pruneRedundantCellSeamFills(
-            swaths_by_cells, no_hl, req.polygon, req.coverage_width);
+            swaths_by_cells, no_hl, req.polygon, r_w);
 
         // ── 5. 孔洞裁剪 ──
         // （当前未实现 standalone splitSwathsCrossingHoles；
@@ -249,12 +200,35 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
             route = route_planner.genRoute(mid_hl, swaths_by_cells);
         }
 
-        // ── 8. 孔洞感知修复 ──
+        // ── 8. 孔洞感知修复（genRoute 后立即修）──
         if (!req.holes.empty()) {
             repairRouteConnectionsAroundHoles(
                 route, req.holes, req.coverage_width * 0.5);
             synchronizeRouteConnectionEndpoints(
                 route, req.coverage_width * 0.5);
+        }
+
+        // ── 9. 边界策略：闭合边界收缩端点 / 开放边界延伸 ──
+        {
+            double margin = (req.boundary_type == "closed")
+                ? req.swath_endpoint_shrink_distance
+                : req.boundary_coverage_margin;
+            if (std::abs(margin) > 1e-9) {
+                const auto& outer = req.polygon.getExteriorRing();
+                std::vector<f2c::types::LinearRing> hr;
+                for (size_t ri = 0; ri + 1 < req.polygon.size(); ++ri)
+                    hr.push_back(req.polygon.getInteriorRing(ri));
+                applyBoundaryMarginToRoute(
+                    route, outer, hr, req.coverage_width, margin);
+                synchronizeRouteConnectionEndpoints(
+                    route, 2.0 * std::abs(margin));
+            }
+        }
+
+        // ── 9.5. 边界调整后最终孔洞修复 ──
+        if (!req.holes.empty()) {
+            repairRouteConnectionsAroundHoles(
+                route, req.holes, 0.001);
         }
 
         // ── 9. 路径规划 ──
