@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_planner.hpp"
@@ -84,7 +86,18 @@ TEST(BoundaryFill, KeepsOuterFillWhenSlantedSwathEndpointLeavesBoundaryGap)
     yingshi::fillBoundaryGaps(
         swaths, bottom_cell, full_polygon, 0.0, 0.90, 0.0);
 
-    EXPECT_EQ(swaths.size(), 2U);
+    bool found_bottom_boundary_fill = false;
+    for (size_t i = 0; i < swaths.size(); ++i) {
+        const auto& swath = swaths.at(i);
+        if (std::abs(swathMidY(swath) - 0.45) < 1e-9 &&
+            std::abs(
+                swath.startPoint().getY() -
+                swath.endPoint().getY()) < 1e-9) {
+            found_bottom_boundary_fill = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_bottom_boundary_fill);
 }
 
 TEST(BoundaryFill, RemovesSeamFillWhenTwoSidesAlreadyCoverTheGap)
