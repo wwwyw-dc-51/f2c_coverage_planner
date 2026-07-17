@@ -24,13 +24,25 @@ find_package(Fields2Cover REQUIRED)
 list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../Fields2Cover/third_party/ortools-src")
 find_package(ortools CONFIG REQUIRED)
 
-# ── 模块化重构：主节点 + 5 个独立模块 ──
-add_executable(polygon_planner_node
-  src/polygon_planner_node.cpp
+# ── 纯规划算法库：不依赖 ROS、评估器或文件输出 ──
+add_library(coverage_planner_core STATIC
   src/decomposer.cpp
   src/swath_generator.cpp
   src/boundary_filler.cpp
   src/path_planner.cpp
+)
+add_library(${PROJECT_NAME}::coverage_planner_core ALIAS coverage_planner_core)
+target_link_libraries(coverage_planner_core PUBLIC
+  Fields2Cover::Fields2Cover
+)
+target_include_directories(coverage_planner_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+# ── ROS 适配层：消息转换、参数和发布 ──
+add_executable(polygon_planner_node
+  src/polygon_planner_node.cpp
 )
 ament_target_dependencies(polygon_planner_node
   rclcpp
@@ -41,7 +53,7 @@ ament_target_dependencies(polygon_planner_node
   visualization_msgs
 )
 target_link_libraries(polygon_planner_node
-  Fields2Cover::Fields2Cover
+  coverage_planner_core
   ortools::ortools
 )
 target_include_directories(polygon_planner_node PRIVATE
@@ -64,10 +76,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(decomposer_test
     test/decomposer_test.cpp
-    src/decomposer.cpp
   )
   target_link_libraries(decomposer_test
-    Fields2Cover::Fields2Cover
+    coverage_planner_core
   )
   target_include_directories(decomposer_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -75,11 +86,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(planning_invariants_test
     test/planning_invariants_test.cpp
-    src/path_planner.cpp
-    src/boundary_filler.cpp
   )
   target_link_libraries(planning_invariants_test
-    Fields2Cover::Fields2Cover
+    coverage_planner_core
   )
   target_include_directories(planning_invariants_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -98,8 +107,15 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS
-  polygon_planner_node
-  DESTINATION lib/${PROJECT_NAME}
+  coverage_planner_core
+  EXPORT export_coverage_planner_core
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+)
+
+install(DIRECTORY
+  include/
+  DESTINATION include
 )
 
 install(DIRECTORY
@@ -107,5 +123,14 @@ install(DIRECTORY
   scripts
   DESTINATION share/${PROJECT_NAME}
 )
+
+# 保持 ROS 可执行文件的标准安装位置。
+install(TARGETS
+  polygon_planner_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+ament_export_targets(export_coverage_planner_core HAS_LIBRARY_TARGET)
+ament_export_dependencies(Fields2Cover)
 
 ament_package()
