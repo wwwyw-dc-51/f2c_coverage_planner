@@ -46,6 +46,7 @@ add_library(coverage_planner_core STATIC
   src/swath_generator.cpp
   src/boundary_filler.cpp
   src/path_planner.cpp
+  src/planner_core.cpp
 )
 add_library(${PROJECT_NAME}::coverage_planner_core ALIAS coverage_planner_core)
 target_link_libraries(coverage_planner_core PUBLIC
