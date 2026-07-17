@@ -7,7 +7,9 @@
 #include "visualization_msgs/msg/marker.hpp"
 
 #include "fields2cover.h"  // Fields2Cover头文件
+#if YINGSHI_EVAL_ENABLED
 #include "coverage_evaluator.hpp"  // 评估模块 — 提供覆盖率/效率/曲率量化评分
+#endif
 
 // ── 模块化重构：独立算法模块 ──
 #include "yingshi_robot/planner_params.hpp"
@@ -3300,7 +3302,8 @@ private:
                 }
             }
 
-            // ── 评估输出 ──
+            // ── 评估输出（实车构建 OFF 时整块编译剔除）──
+#if YINGSHI_EVAL_ENABLED
             if (eval_enable_report_) {
                 // 构建孔洞环列表（f2c::types::LinearRing 格式）
                 std::vector<f2c::types::LinearRing> hole_rings;
@@ -3496,6 +3499,7 @@ private:
                 }
 
             }
+#endif  // YINGSHI_EVAL_ENABLED
 
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in path planning: %s", e.what());
