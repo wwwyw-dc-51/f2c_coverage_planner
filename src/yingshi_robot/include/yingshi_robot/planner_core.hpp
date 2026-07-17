@@ -93,21 +93,29 @@ struct PlanningResult {
 
 // ========== 规划核心门面 ==========
 //
-// 当前状态（2026-07-17）：接口完整，实现部分完成。
+// 当前状态（2026-07-17）：接口完整，核心功能已实现，ROS 节点已接入。
 //
-// 已实现：headland 生成、rectilinear 分解、swath 生成+填补、贪心排序、
-//         genRoute/Snake 路由、direct 路径规划、孔洞连接修复
+// 已实现：
+//   - headland 生成（ConstHL + mid_hl / no_hl 双层侵蚀）
+//   - rectilinear 分解 + no_hl secondary erosion
+//   - swath 生成 + fillBoundaryGaps + filterShortSwaths
+//   - swath_angle_optimization（多角度候选，选 swath 数最少）
+//   - pruneRedundantCellSeamFills
+//   - greedyCellOrder / Snake 路由
+//   - genRoute（Boustrophedon TSP）+ Snake 直连
+//   - repairRouteConnectionsAroundHoles + synchronizeRouteConnectionEndpoints
+//   - turn_planner_type：dubins / dubins_cc / reeds_shepp / direct
+//   - RDP 路径简化 + materializePath
+//   - 孔洞作为 polygon 内环传入（buildPlanningRequest 含 addRing）
+//   - use_planner_core_:=true 切换至 planWithCore()（含评估输出）
 //
 // 待补齐（按优先级）：
-//   1. 孔洞作为 polygon 内环传入（当前只放在 req.holes 里）
-//   2. no_hl secondary erosion
-//   3. swath_angle_optimization 多角度候选
-//   4. turn_planner_type 非 direct 模式
-//   5. boundary_coverage_margin 逐端点调整
-//   6. sweep_align_angle + 自适应 headland ratio
+//   1. PlannerCore 与 legacy 管线结果对齐（当前 notched: core 77.3 vs legacy 87.3）
+//   2. boundary_coverage_margin 逐端点调整
+//   3. sweep_align_angle + 自适应 headland ratio
+//   4. PathSanityCheck 集成到 publish seam 前
 //
-// use_planner_core_ 默认 false；补齐上述各项并通过独立集成测试后
-// 再切为 true、删除旧管线。
+// use_planner_core_ 默认 false；结果对齐并通过独立集成测试后切为 true。
 class PlannerCore {
 public:
     PlannerCore() = default;
