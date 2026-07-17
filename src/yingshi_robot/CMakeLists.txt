@@ -26,6 +26,7 @@ find_package(ortools CONFIG REQUIRED)
 
 # ── 纯规划算法库：不依赖 ROS、评估器或文件输出 ──
 add_library(coverage_planner_core STATIC
+  src/planner_config.cpp
   src/decomposer.cpp
   src/swath_generator.cpp
   src/boundary_filler.cpp
@@ -103,6 +104,13 @@ if(BUILD_TESTING)
   target_include_directories(coverage_evaluator_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+
+  ament_add_gtest(planner_config_test
+    test/planner_config_test.cpp
+  )
+  target_link_libraries(planner_config_test
+    coverage_planner_core
   )
 endif()
 
