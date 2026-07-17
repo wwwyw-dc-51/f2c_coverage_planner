@@ -16,6 +16,7 @@
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/path_geometry.hpp"
+#include "yingshi_robot/planner_core.hpp"
 
 #include <fstream>
 #include <iomanip>
@@ -66,6 +67,7 @@ private:
     bool eval_use_grid_method_;
     double eval_coverage_threshold_;
     std::string output_dir_;
+    bool use_planner_core_;            // 是否使用 PlannerCore（P2 迁移开关）
 
     // ── 优化开关参数 ──
     bool use_optimized_planner_;       // ★ 总开关：true=优化版 false=原版
@@ -115,6 +117,7 @@ public:
         this->declare_parameter("eval_use_grid_method", false);
         this->declare_parameter("eval_coverage_threshold", 0.995);
         this->declare_parameter("output_dir", "/tmp");  // 调试输出目录，实车可改为只读挂载路径
+        this->declare_parameter("use_planner_core", false);  // P2 迁移开关：true=PlannerCore管线
 
         // ── 优化参数 ──
         this->declare_parameter("use_optimized_planner", false);
@@ -368,6 +371,7 @@ private:
         eval_use_grid_method_ = get_bool("eval_use_grid_method");
         eval_coverage_threshold_ = get_double("eval_coverage_threshold");
         output_dir_ = get_string("output_dir");
+        use_planner_core_ = get_bool("use_planner_core");
 
         // ── 优化参数 ──
         use_optimized_planner_ = get_bool("use_optimized_planner");
@@ -1370,6 +1374,84 @@ private:
 
         return simplified;
     }
+
+    // ========== PlannerCore 桥接（P2 迁移）==========
+
+    // 从当前 ROS 参数和消息构建纯算法请求
+    yingshi::PlanningRequest buildPlanningRequest(
+        const geometry_msgs::msg::Polygon& polygon_msg,
+        int polygon_id) const
+    {
+        yingshi::PlanningRequest req;
+        int idx = polygon_id - 1;
+
+        // 几何输入
+        f2c::types::LinearRing ring;
+        for (const auto& p : polygon_msg.points)
+            ring.addPoint(f2c::types::Point(p.x, p.y));
+        if (polygon_msg.points.size() > 0 &&
+            (polygon_msg.points.front().x != polygon_msg.points.back().x ||
+             polygon_msg.points.front().y != polygon_msg.points.back().y))
+            ring.addPoint(f2c::types::Point(
+                polygon_msg.points.front().x,
+                polygon_msg.points.front().y));
+
+        req.polygon.setGeometry(0, ring);
+        for (size_t hi = 0; hi < last_holes_[idx].size(); ++hi) {
+            const auto& h = last_holes_[idx][hi];
+            if (h.points.size() < 3) continue;
+            f2c::types::LinearRing hr;
+            for (const auto& hp : h.points)
+                hr.addPoint(f2c::types::Point(hp.x, hp.y));
+            if (hr.size() >= 4) req.holes.push_back(hr);
+        }
+
+        // 机器人参数
+        req.robot_width = robot_width_;
+        req.coverage_width = coverage_width_;
+        req.min_turning_radius = min_turning_radius_;
+        req.max_diff_curv = max_diff_curv_;
+
+        // Headland 参数
+        req.mid_hl_width_ratio = mid_hl_width_ratio_;
+        req.no_hl_width_ratio = no_hl_width_ratio_;
+
+        // Swath 参数
+        req.swath_overlap_ratio = swath_overlap_ratio_;
+        req.swath_endpoint_shrink_distance = swath_endpoint_shrink_distance_;
+        req.min_swath_length = min_swath_length_;
+
+        // 分解参数
+        req.decomposition_enabled = decomposition_enabled_;
+        req.use_sweep_decomp = use_sweep_decomp_;
+        req.decomposition_angle_optimization = decomposition_angle_optimization_;
+        req.merge_angle_threshold = merge_angle_threshold_;
+
+        // Swath 优化
+        req.swath_angle_optimization = swath_angle_optimization_;
+        req.swath_angle_candidates = swath_angle_list_;
+
+        // 排序 + 路径
+        req.swath_order_type = swath_order_type_;
+        req.turn_planner_type = turn_planner_type_;
+        req.path_simplify_enabled = path_simplify_enabled_;
+        req.path_simplify_tolerance = path_simplify_tolerance_;
+        req.path_simplify_turn_threshold = path_simplify_turn_threshold_;
+
+        // 过滤
+        req.filter_tiny_cells = filter_tiny_cells_;
+        req.min_cell_area_ratio = min_cell_area_ratio_;
+        req.min_hole_area = min_hole_area_;
+
+        // 边界策略
+        req.boundary_type = boundary_type_;
+        req.boundary_coverage_margin = boundary_coverage_margin_;
+        req.boundary_open_default_margin = boundary_open_default_margin_;
+
+        return req;
+    }
+
+    yingshi::PlannerCore core_;  // P2: 纯算法规划核心
 
     // ========== 主规划函数 ==========
     void planCoveragePath(const geometry_msgs::msg::Polygon& polygon, int polygon_id)
