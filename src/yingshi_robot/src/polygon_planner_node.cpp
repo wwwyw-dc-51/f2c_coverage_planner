@@ -1401,7 +1401,17 @@ private:
             f2c::types::LinearRing hr;
             for (const auto& hp : h.points)
                 hr.addPoint(f2c::types::Point(hp.x, hp.y));
-            if (hr.size() >= 4) req.holes.push_back(hr);
+            // 闭合 ring
+            if (hr.size() >= 3) {
+                const auto& first = h.points.front();
+                const auto& last = h.points.back();
+                if (first.x != last.x || first.y != last.y)
+                    hr.addPoint(f2c::types::Point(first.x, first.y));
+            }
+            if (hr.size() >= 4) {
+                req.holes.push_back(hr);
+                req.polygon.addRing(hr);  // 作为内环加入 polygon
+            }
         }
 
         // 机器人参数
@@ -1451,9 +1461,175 @@ private:
 
     yingshi::PlannerCore core_;  // P2: 纯算法规划核心
 
+    // ========== PlannerCore 规划路径（P2 迁移）==========
+    void planWithCore(const geometry_msgs::msg::Polygon& polygon, int polygon_id)
+    {
+        int index = polygon_id - 1;
+        auto planning_start = std::chrono::steady_clock::now();
+
+        // 1. 构建纯算法请求
+        auto req = buildPlanningRequest(polygon, polygon_id);
+
+        // 2. 执行规划
+        auto result = core_.plan(req);
+
+        if (!result.success) {
+            RCLCPP_ERROR(this->get_logger(),
+                "PlannerCore plan() failed: %s", result.error_message.c_str());
+            clearPlanningCacheForPolygon(index, true);
+            return;
+        }
+
+        RCLCPP_INFO(this->get_logger(),
+            "PlannerCore: %zu swaths, %zu connections, %.1f ms",
+            result.total_swaths, result.total_connections,
+            result.planning_time_ms);
+
+        if (result.path_has_crossings) {
+            RCLCPP_WARN(this->get_logger(),
+                "⚠ PlannerCore: %zu hole-crossing segments detected",
+                result.hole_crossing_segments);
+        }
+
+        // 3. 发布 nav_msgs::Path（从 F2C Path 完整还原，含角度）
+        nav_msgs::msg::Path path_msg;
+        path_msg.header.frame_id = "map";
+        path_msg.header.stamp = this->now();
+
+        const auto path_waypoints = yingshi::materializePathWaypoints(result.path);
+        for (const auto& wp : path_waypoints) {
+            geometry_msgs::msg::PoseStamped ps;
+            ps.header = path_msg.header;
+            ps.pose.position.x = wp.point.getX();
+            ps.pose.position.y = wp.point.getY();
+            ps.pose.position.z = 0.0;
+            ps.pose.orientation.w = std::cos(wp.angle / 2.0);
+            ps.pose.orientation.z = std::sin(wp.angle / 2.0);
+            path_msg.poses.push_back(ps);
+        }
+
+        last_paths_[index] = path_msg;
+        path_pubs_[index]->publish(path_msg);
+
+        // 4. 发布 swath 端点（可视化）
+        geometry_msgs::msg::PoseArray swath_pts;
+        swath_pts.header.frame_id = "map";
+        swath_pts.header.stamp = this->now();
+
+        // 从 Route 提取 swaths
+        f2c::types::Swaths all_swaths;
+        for (size_t i = 0; i < result.route.sizeVectorSwaths(); ++i) {
+            const auto& rs = result.route.getSwaths(i);
+            for (size_t j = 0; j < rs.size(); ++j)
+                all_swaths.push_back(rs.at(j));
+        }
+
+        for (const auto& sw : all_swaths) {
+            geometry_msgs::msg::Pose sp, ep;
+            sp.position.x = sw.startPoint().getX();
+            sp.position.y = sw.startPoint().getY();
+            sp.position.z = 0.0;
+            ep.position.x = sw.endPoint().getX();
+            ep.position.y = sw.endPoint().getY();
+            ep.position.z = 0.0;
+            double dx = ep.position.x - sp.position.x;
+            double dy = ep.position.y - sp.position.y;
+            double yaw = std::atan2(dy, dx);
+            sp.orientation.w = std::cos(yaw / 2.0);
+            sp.orientation.z = std::sin(yaw / 2.0);
+            ep.orientation = sp.orientation;
+            swath_pts.poses.push_back(sp);
+            swath_pts.poses.push_back(ep);
+        }
+
+        last_swath_points_[index] = swath_pts;
+        swath_points_pubs_[index]->publish(swath_pts);
+
+        // 5. 发布采样路径点（在 swath 线上均匀采样）
+        geometry_msgs::msg::PoseArray sampled_pts;
+        sampled_pts.header.frame_id = "map";
+        sampled_pts.header.stamp = this->now();
+
+        for (const auto& sw : all_swaths) {
+            double dx = sw.endPoint().getX() - sw.startPoint().getX();
+            double dy = sw.endPoint().getY() - sw.startPoint().getY();
+            double len = std::hypot(dx, dy);
+            double yaw = std::atan2(dy, dx);
+            int n = std::max(2, static_cast<int>(len / path_resolution_));
+            for (int i = 0; i < n; ++i) {
+                double r = static_cast<double>(i) / (n - 1);
+                geometry_msgs::msg::Pose p;
+                p.position.x = sw.startPoint().getX() + r * dx;
+                p.position.y = sw.startPoint().getY() + r * dy;
+                p.position.z = 0.0;
+                p.orientation.w = std::cos(yaw / 2.0);
+                p.orientation.z = std::sin(yaw / 2.0);
+                sampled_pts.poses.push_back(p);
+            }
+        }
+
+        last_sampled_points_[index] = sampled_pts;
+        sampled_path_pubs_[index]->publish(sampled_pts);
+
+        // 6. 清除可能残留的掉头不可执行标记（direct 模式无转弯曲线）
+        {
+            visualization_msgs::msg::Marker clear;
+            clear.header.frame_id = "map";
+            clear.header.stamp = this->now();
+            clear.ns = "infeasible_turns";
+            clear.id = 0;
+            clear.action = visualization_msgs::msg::Marker::DELETE;
+            infeasible_turn_pubs_[index]->publish(clear);
+            last_infeasible_turn_markers_[index] = visualization_msgs::msg::Marker();
+        }
+
+        // 7. 孔洞交叉诊断
+        if (!last_holes_[index].empty()) {
+            std::vector<f2c::types::LinearRing> hole_rings;
+            for (const auto& hole : last_holes_[index]) {
+                auto hr = makeClosedF2CRing(hole);
+                if (hr.size() >= 4) hole_rings.push_back(hr);
+            }
+            if (!hole_rings.empty()) {
+                size_t pts_in_hole = 0, segs_crossing = 0;
+                for (const auto& pt : result.path_points) {
+                    if (yingshi::pointInAnyHole(pt.getX(), pt.getY(), hole_rings))
+                        ++pts_in_hole;
+                }
+                for (size_t si = 0; si + 1 < result.path_points.size(); ++si) {
+                    if (yingshi::segmentCrossesHole(
+                            result.path_points[si].getX(), result.path_points[si].getY(),
+                            result.path_points[si+1].getX(), result.path_points[si+1].getY(),
+                            hole_rings, 50))
+                        ++segs_crossing;
+                }
+                RCLCPP_INFO(this->get_logger(),
+                    "  Core path (%zu pts): %zu pts in hole, %zu segs crossing",
+                    result.path_points.size(), pts_in_hole, segs_crossing);
+                if (segs_crossing > 0) {
+                    RCLCPP_WARN(this->get_logger(),
+                        "⚠ CORE PATH CROSSES HOLE! (%zu segments)", segs_crossing);
+                }
+            }
+        }
+
+        auto planning_end = std::chrono::steady_clock::now();
+        double total_ms = std::chrono::duration<double, std::milli>(
+            planning_end - planning_start).count();
+        RCLCPP_INFO(this->get_logger(),
+            "PlannerCore done: %zu path waypoints, %.1f ms total (plan=%.1f ms)",
+            path_waypoints.size(), total_ms, result.planning_time_ms);
+    }
+
     // ========== 主规划函数 ==========
     void planCoveragePath(const geometry_msgs::msg::Polygon& polygon, int polygon_id)
     {
+        // P2 迁移开关：PlannerCore 已接入时走新管线
+        if (use_planner_core_) {
+            planWithCore(polygon, polygon_id);
+            return;
+        }
+
         int index = polygon_id - 1;  // 转换为数组索引（需在 try 外供 catch 访问）
         try {
             RCLCPP_INFO(this->get_logger(), "Starting coverage path planning for polygon_%d...", polygon_id);

@@ -10,9 +10,11 @@
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/planner_params.hpp"
+#include <fields2cover/path_planning/dubins_curves.h>
+#include <fields2cover/path_planning/dubins_curves_cc.h>
+#include <fields2cover/path_planning/reeds_shepp_curves.h>
 #include <chrono>
 #include <cmath>
-#include <stdexcept>
 
 namespace yingshi {
 
@@ -151,11 +153,29 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
                 DecomposerParams dparams;
                 dparams.use_sweep = req.use_sweep_decomp;
                 auto decomposed = rectilinearDecompose(work, grid, dparams);
-                for (size_t di = 0; di < decomposed.size(); ++di)
-                    no_hl.addGeometry(decomposed.getGeometry(di));
+                // 对每个分解后的 cell 施加 secondary headland 侵蚀
+                double no_hl_w = req.no_hl_width_ratio * req.robot_width;
+                if (no_hl_w > 1e-6) {
+                    for (size_t di = 0; di < decomposed.size(); ++di) {
+                        f2c::types::Cells single;
+                        single.addGeometry(decomposed.getGeometry(di));
+                        auto eroded = hl_gen.generateHeadlands(single, no_hl_w);
+                        for (size_t ei = 0; ei < eroded.size(); ++ei)
+                            no_hl.addGeometry(eroded.getGeometry(ei));
+                    }
+                } else {
+                    for (size_t di = 0; di < decomposed.size(); ++di)
+                        no_hl.addGeometry(decomposed.getGeometry(di));
+                }
             }
         } else {
-            no_hl.addGeometry(req.polygon);
+            // 不分解：对 polygon 整体施加 no_hl 侵蚀
+            double no_hl_w = req.no_hl_width_ratio * req.robot_width;
+            if (no_hl_w > 1e-6) {
+                no_hl = hl_gen.generateHeadlands(field, no_hl_w);
+            } else {
+                no_hl.addGeometry(req.polygon);
+            }
         }
 
         if (no_hl.size() == 0) {
@@ -165,11 +185,35 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
 
         // ── 3. 生成 swaths（逐 cell）──
         f2c::sg::BruteForce swath_gen;
+        swath_gen.setAllowOverlap(true);  // 允许边界补线与已有 swath 微重叠
         f2c::types::SwathsByCells swaths_by_cells;
 
+        // 若启用角度优化，提取候选角度列表
+        std::vector<double> angle_candidates = req.swath_angle_candidates;
+        if (req.swath_angle_optimization && angle_candidates.empty()) {
+            angle_candidates = extractEdgeAngles(req.polygon, 2.0);
+        }
+
         for (size_t ci = 0; ci < no_hl.size(); ++ci) {
+            const auto& cell = no_hl.getGeometry(ci);
+
+            // 确定 swath 角度
+            double ang = computeCellMainDirection(cell);
+            if (req.swath_angle_optimization && !angle_candidates.empty()) {
+                // 多角度候选：选 swath 数最少的
+                auto best = optimizeSwathAngle(
+                    cell, swath_gen, r_w, angle_candidates);
+                if (best.size() > 0) {
+                    fillBoundaryGaps(best, cell, req.polygon, ang,
+                                     req.coverage_width,
+                                     req.swath_endpoint_shrink_distance);
+                    if (best.size() > 0) swaths_by_cells.push_back(best);
+                    continue;
+                }
+            }
+
             generateSwathsForCell(
-                no_hl.getGeometry(ci), req.polygon, req, r_w,
+                cell, req.polygon, req, r_w,
                 swath_gen, swaths_by_cells);
         }
 
@@ -213,8 +257,24 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
                 route, req.coverage_width * 0.5);
         }
 
-        // ── 9. 路径规划（direct 模式，零半径欧氏连接）──
-        f2c::types::Path path = planDirectPath(route, 1.0);
+        // ── 9. 路径规划 ──
+        f2c::types::Path path;
+        if (req.turn_planner_type == "dubins_cc") {
+            f2c::pp::PathPlanning pp;
+            f2c::pp::DubinsCurvesCC dcc;
+            path = pp.planPath(robot, route, dcc);
+        } else if (req.turn_planner_type == "reeds_shepp") {
+            f2c::pp::PathPlanning pp;
+            f2c::pp::ReedsSheppCurves rs;
+            path = pp.planPath(robot, route, rs);
+        } else if (req.turn_planner_type == "dubins") {
+            f2c::pp::PathPlanning pp;
+            f2c::pp::DubinsCurves dc;
+            path = pp.planPath(robot, route, dc);
+        } else {
+            // direct：零半径欧氏直连（默认）
+            path = planDirectPath(route, 1.0);
+        }
 
         // ── 10. 路径后处理 ──
         if (req.path_simplify_enabled && path.size() > 0) {
