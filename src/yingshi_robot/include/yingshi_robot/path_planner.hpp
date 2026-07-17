@@ -1,5 +1,6 @@
 #pragma once
 #include <fields2cover.h>
+#include <string>
 #include <vector>
 #include "yingshi_robot/planner_params.hpp"
 
@@ -51,13 +52,16 @@ f2c::types::Path simplifyPath(
     double epsilon,
     double turn_angle_threshold);
 
-// 贪心 Cell 排序：根据 swath 端点实际位置动态决定遍历顺序
-// 从 C0 出发，每次选择端点最近的未访问 cell，支持自动翻转 swath 方向
+// 贪心 Cell 排序：根据上游出口动态决定 Cell 顺序和 Cell 内入口变体。
+// 保留 F2C 排序器生成的规则覆盖顺序；有孔洞时仍以极角 Cell 顺序
+// 为安全骨架，无孔洞时联合选择最近 Cell 与其四种合法入口变体。
 // hole_rings: 孔洞环（用于穿洞检测，空则跳过）
+// swath_order_type: "boustrophedon"（默认）| "snake" | "spiral"
 // cell_order: [out] 遍历顺序 → 原始 no_hl 索引
 void greedyCellOrder(
     f2c::types::SwathsByCells& swaths_by_cells,
     std::vector<size_t>& cell_order,
-    const std::vector<f2c::types::LinearRing>& hole_rings);
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    const std::string& swath_order_type = "boustrophedon");
 
 }  // namespace yingshi

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "yingshi_robot/boundary_filler.hpp"
@@ -9,12 +10,13 @@
 namespace {
 
 f2c::types::Swath makeSwath(
-    double x0, double y0, double x1, double y1, double width = 0.45)
+    double x0, double y0, double x1, double y1,
+    double width = 0.45, int id = 0)
 {
     f2c::types::LineString line;
     line.addPoint(f2c::types::Point(x0, y0));
     line.addPoint(f2c::types::Point(x1, y1));
-    return f2c::types::Swath(line, width);
+    return f2c::types::Swath(line, width, id);
 }
 
 f2c::types::Cell makeRectangle(
@@ -98,6 +100,119 @@ TEST(BoundaryFill, KeepsOuterFillWhenSlantedSwathEndpointLeavesBoundaryGap)
         }
     }
     EXPECT_TRUE(found_bottom_boundary_fill);
+}
+
+TEST(BoundaryFill, CapsOuterFillAtTheCurrentCellReachableExtent)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto inset_bottom_cell = makeRectangle(0.15, 0.15, 9.85, 1.2);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 0.8, 9.85, 0.8, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, inset_bottom_cell, full_polygon, 0.0, 0.90, 0.0);
+
+    bool found_bottom_boundary_fill = false;
+    for (size_t i = 0; i < swaths.size(); ++i) {
+        const auto& swath = swaths.at(i);
+        if (std::abs(swathMidY(swath) - 0.45) > 1e-9 ||
+            std::abs(
+                swath.startPoint().getY() -
+                swath.endPoint().getY()) > 1e-9) {
+            continue;
+        }
+        found_bottom_boundary_fill = true;
+        EXPECT_NEAR(std::min(
+            swath.startPoint().getX(), swath.endPoint().getX()), 0.15, 1e-9);
+        EXPECT_NEAR(std::max(
+            swath.startPoint().getX(), swath.endPoint().getX()), 9.85, 1e-9);
+    }
+    EXPECT_TRUE(found_bottom_boundary_fill);
+}
+
+TEST(BoundaryEndpointAdjustment, DoesNotLetHoleProximityAtMidpointShrinkSafeEndpoints)
+{
+    const auto outer = makeRectangle(0.0, 0.0, 25.0, 25.0);
+    const std::vector<f2c::types::LinearRing> holes {
+        yingshi::makeClosedRing({
+            f2c::types::Point(9.0, 13.5),
+            f2c::types::Point(19.0, 13.5),
+            f2c::types::Point(19.0, 23.5),
+            f2c::types::Point(9.0, 23.5),
+        })
+    };
+    const auto swath = makeSwath(24.85, 24.0865, 0.15, 24.0865, 0.90);
+
+    const auto adjusted = yingshi::adjustSwathEndpointsForBoundaryClearance(
+        swath, outer.getExteriorRing(), holes, 0.90, 0.03);
+
+    EXPECT_NEAR(adjusted.startPoint().getX(), 24.85, 1e-9);
+    EXPECT_NEAR(adjusted.endPoint().getX(), 0.15, 1e-9);
+}
+
+TEST(BoundaryEndpointAdjustment, ShrinksOnlyTheEndpointThatIsNearAHole)
+{
+    const auto outer = makeRectangle(0.0, 0.0, 25.0, 25.0);
+    const std::vector<f2c::types::LinearRing> holes {
+        yingshi::makeClosedRing({
+            f2c::types::Point(9.0, 13.5),
+            f2c::types::Point(19.0, 13.5),
+            f2c::types::Point(19.0, 23.5),
+            f2c::types::Point(9.0, 23.5),
+        })
+    };
+    const auto swath = makeSwath(19.15, 20.0, 24.85, 20.0, 0.90);
+
+    const auto adjusted = yingshi::adjustSwathEndpointsForBoundaryClearance(
+        swath, outer.getExteriorRing(), holes, 0.90, 0.03);
+
+    EXPECT_NEAR(adjusted.startPoint().getX(), 19.21, 1e-9);
+    EXPECT_NEAR(adjusted.endPoint().getX(), 24.85, 1e-9);
+}
+
+TEST(CellOrder, PreservesBoundaryFillAtExplicitCellEnd)
+{
+    f2c::types::Swaths cell;
+    cell.push_back(makeSwath(18.38, 5.423, 24.79, 5.423, 0.90, 40));
+    cell.push_back(makeSwath(24.79, 4.550, 0.21, 4.550, 0.90, 41));
+    cell.push_back(makeSwath(0.15, 3.677, 24.85, 3.677, 0.90, 42));
+    cell.push_back(makeSwath(24.85, 2.804, 0.15, 2.804, 0.90, 43));
+    cell.push_back(makeSwath(0.15, 1.931, 24.85, 1.931, 0.90, 44));
+    cell.push_back(makeSwath(24.85, 1.058, 0.15, 1.058, 0.90, 46));
+    cell.push_back(makeSwath(0.21, 5.423, 11.62, 5.423, 0.90, 47));
+    // 补线生成时已明确追加在末尾，但默认 ID=0 曾让 F2C 再排序时把它挪走。
+    cell.push_back(makeSwath(0.15, 0.185, 24.85, 0.185, 0.90, 0));
+    f2c::types::SwathsByCells cells {cell};
+    std::vector<size_t> order;
+
+    yingshi::greedyCellOrder(cells, order, {}, "boustrophedon");
+
+    ASSERT_EQ(cells.size(), 1U);
+    ASSERT_EQ(cells.at(0).size(), cell.size());
+    EXPECT_NEAR(swathMidY(cells.at(0).back()), 0.185, 1e-9);
+}
+
+TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryVariant)
+{
+    f2c::types::Swaths first_cell;
+    first_cell.push_back(makeSwath(0.0, 0.0, 10.0, 0.0, 0.90, 0));
+
+    f2c::types::Swaths second_cell;
+    second_cell.push_back(makeSwath(0.0, 1.0, 10.0, 1.0, 0.90, 0));
+    second_cell.push_back(makeSwath(0.0, 2.0, 10.0, 2.0, 0.90, 1));
+    f2c::types::SwathsByCells cells {first_cell, second_cell};
+    std::vector<size_t> order;
+
+    yingshi::greedyCellOrder(cells, order, {}, "boustrophedon");
+
+    ASSERT_EQ(cells.size(), 2U);
+    ASSERT_EQ(cells.at(1).size(), 2U);
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 10.0, 1e-9);
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getY(), 1.0, 1e-9);
+    EXPECT_NEAR(
+        cells.at(0).back().endPoint().distance(
+            cells.at(1).at(0).startPoint()),
+        1.0, 1e-9);
 }
 
 TEST(BoundaryFill, RemovesSeamFillWhenTwoSidesAlreadyCoverTheGap)

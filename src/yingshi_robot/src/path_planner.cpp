@@ -8,6 +8,7 @@
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/boundary_filler.hpp"  // segmentCrossesHole, pointInAnyHole
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -557,21 +558,15 @@ f2c::types::Path simplifyPath(
     return result;
 }
 
-// ========== 贪心 Cell 排序 ==========
-// 替代死板的圆形排序 (circular sort)，根据 Boustrophedon 排序后
-// swath 的实际端点位置，动态决定 cell 遍历顺序。
-//
-// 算法：
-//   1. 从 C0 出发，cur = C0.last_swath.endPoint()
-//   2. 每次在未访问 cell 中选择端点距离 cur 最近的
-//   3. 两个候选方向：正常 (first.start) / 反转 (last.end)
-//   4. 穿洞检测 → 穿洞则距离 +1000（最后手段才选）
-//   5. 选 reverse 则翻转该 cell 的 swaths（顺序 + 每条起终点）
-//   6. 更新 cur 为选中 cell 的出口，继续直到所有 cell 访问完毕
+// ========== 贪心 Cell 排序（链式递推） ==========
+// 每确定一个 Cell，才根据上一 Cell 的真实出口选择该 Cell 的内部路径变体。
+// 保留 F2C 原生排序，只在四种合法入口变体中选择连接代价最小者，
+// 避免逐条最近邻破坏规则的往复覆盖顺序。
 void greedyCellOrder(
     f2c::types::SwathsByCells& swaths_by_cells,
     std::vector<size_t>& cell_order,
-    const std::vector<f2c::types::LinearRing>& hole_rings)
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    const std::string& swath_order_type)
 {
     const size_t n_cells = swaths_by_cells.size();
 
@@ -579,8 +574,75 @@ void greedyCellOrder(
     cell_order.resize(n_cells);
     for (size_t i = 0; i < n_cells; ++i) cell_order[i] = i;
 
-    // 单 cell 无需排序
-    if (n_cells <= 1) return;
+    if (n_cells == 0) return;
+
+    std::vector<bool> ids_normalized(n_cells, false);
+
+    // F2C 依据 Swath ID 排序。补线在生成阶段已明确放在 Cell 的首/尾，
+    // 因此先按当前顺序重新编号，不能让默认 ID=0 的补线跳回中间。
+    const auto normalizeIds = [&](size_t ci) {
+        if (ids_normalized[ci]) return;
+        ids_normalized[ci] = true;
+        auto& cell = swaths_by_cells[ci];
+        for (size_t i = 0; i < cell.size(); ++i) {
+            cell.at(i).setId(static_cast<int>(i));
+        }
+    };
+
+    const auto sortedVariant = [&](size_t ci, uint32_t variant) {
+        normalizeIds(ci);
+        const auto& cell = swaths_by_cells[ci];
+        if (swath_order_type == "snake") {
+            f2c::rp::SnakeOrder sorter;
+            return sorter.genSortedSwaths(cell, variant);
+        }
+        if (swath_order_type == "spiral") {
+            f2c::rp::SpiralOrder sorter(6);
+            return sorter.genSortedSwaths(cell, variant);
+        }
+        f2c::rp::BoustrophedonOrder sorter;
+        return sorter.genSortedSwaths(cell, variant);
+    };
+
+    const auto connectionCost = [&](double from_x, double from_y,
+                                    const f2c::types::Point& target) {
+        double cost = std::hypot(
+            from_x - target.getX(), from_y - target.getY());
+        if (segmentCrossesHole(
+                from_x, from_y, target.getX(), target.getY(),
+                hole_rings, 20)) {
+            cost += 1000.0;
+        }
+        return cost;
+    };
+
+    struct CellChoice {
+        size_t cell_index {0};
+        double cost {std::numeric_limits<double>::max()};
+        f2c::types::Swaths swaths;
+    };
+
+    const auto chooseVariant = [&](size_t ci, double entry_x, double entry_y) {
+        CellChoice best;
+        best.cell_index = ci;
+        normalizeIds(ci);
+        if (swaths_by_cells[ci].size() == 0) return best;
+
+        for (uint32_t variant = 0; variant < 4; ++variant) {
+            auto candidate = sortedVariant(ci, variant);
+            const double cost = connectionCost(
+                entry_x, entry_y, candidate.at(0).startPoint());
+            if (cost < best.cost) {
+                best.cost = cost;
+                best.swaths = std::move(candidate);
+            }
+        }
+        return best;
+    };
+
+    // C0 没有上游出口，固定使用 variant 0 作为稳定起点。
+    swaths_by_cells[0] = sortedVariant(0, 0);
+    if (n_cells == 1) return;
 
     // ── 有孔洞时：圆形绕洞排序作为遍历序基础 ──
     // 贪心纯端点距离在孔洞场景下可能产生跨洞连接，
@@ -658,89 +720,42 @@ void greedyCellOrder(
         }
     }
 
-    // 主循环：有孔洞时按圆形序遍历，反转按贪心；无孔洞时纯贪心
+    // 主循环：有孔洞时保持极角 Cell 顺序；无孔洞时动态选择最近 Cell。
     size_t order_idx = 1;  // C0 已访问，从 traversal_order[1] 开始
     while (new_order.size() < n_cells) {
-        size_t best_ci;
-        bool best_reverse = false;
+        CellChoice choice;
 
         if (!hole_rings.empty()) {
-            // 有孔洞：按圆形绕洞序选择下一个 cell（贪心仅决定反转）
-            best_ci = traversal_order[order_idx++];
-            // 贪心决定反转方向
-            const auto& cell = swaths_by_cells[best_ci];
-            if (cell.size() > 0) {
-                const auto& first_sw = cell.at(0);
-                const auto& last_sw = cell.at(cell.size() - 1);
-                double fsx = first_sw.startPoint().getX(), fsy = first_sw.startPoint().getY();
-                double lex = last_sw.endPoint().getX(), ley = last_sw.endPoint().getY();
-                double dist_normal = std::hypot(cur_x - fsx, cur_y - fsy);
-                double dist_rev = std::hypot(cur_x - lex, cur_y - ley);
-                if (yingshi::segmentCrossesHole(cur_x, cur_y, fsx, fsy, hole_rings, 20))
-                    dist_normal += 1000.0;
-                if (yingshi::segmentCrossesHole(cur_x, cur_y, lex, ley, hole_rings, 20))
-                    dist_rev += 1000.0;
-                best_reverse = (dist_rev < dist_normal);
-            }
+            const size_t next_ci = traversal_order[order_idx++];
+            choice = chooseVariant(next_ci, cur_x, cur_y);
         } else {
-            // 无孔洞：纯贪心选择最近未访问 cell
-            double best_dist = std::numeric_limits<double>::max();
-            best_ci = 0;
+            // Cell 次序与内部入口变体一起由上游真实出口决定。
             for (size_t ci = 0; ci < n_cells; ++ci) {
                 if (visited[ci]) continue;
-                const auto& cell = swaths_by_cells[ci];
-                if (cell.size() == 0) continue;
-                const auto& first_sw = cell.at(0);
-                const auto& last_sw = cell.at(cell.size() - 1);
-                double fsx = first_sw.startPoint().getX(), fsy = first_sw.startPoint().getY();
-                double lex = last_sw.endPoint().getX(), ley = last_sw.endPoint().getY();
-                double dist_normal = std::hypot(cur_x - fsx, cur_y - fsy);
-                double dist_rev = std::hypot(cur_x - lex, cur_y - ley);
-                if (dist_normal < best_dist) { best_dist = dist_normal; best_ci = ci; best_reverse = false; }
-                if (dist_rev < best_dist) { best_dist = dist_rev; best_ci = ci; best_reverse = true; }
-            }
-            if (best_dist >= std::numeric_limits<double>::max() * 0.5) break;
-        }
-
-        // 选中 best_ci，标记已访问
-        visited[best_ci] = true;
-        new_order.push_back(best_ci);
-
-        // 先计算出口坐标（在 move 之前，避免 use-after-move）
-        double next_x, next_y;
-        {
-            const auto& orig_cell = swaths_by_cells[best_ci];
-            if (best_reverse) {
-                // 出口 = 原 cell 第一个 swath 的起点（反转后最后一个 swath 的终点）
-                next_x = orig_cell.at(0).startPoint().getX();
-                next_y = orig_cell.at(0).startPoint().getY();
-            } else {
-                // 出口 = 最后一个 swath 的终点
-                const auto& last_sw = orig_cell.at(orig_cell.size() - 1);
-                next_x = last_sw.endPoint().getX();
-                next_y = last_sw.endPoint().getY();
+                auto candidate = chooseVariant(ci, cur_x, cur_y);
+                if (candidate.cost < choice.cost) {
+                    choice = std::move(candidate);
+                }
             }
         }
 
-        auto selected_cell = std::move(swaths_by_cells[best_ci]);
-
-        if (best_reverse) {
-            // 反转整个 cell：倒序 swaths + 每条 swath 交换起终点
-            f2c::types::Swaths reversed;
-            for (int si = static_cast<int>(selected_cell.size()) - 1; si >= 0; --si) {
-                const auto& sw = selected_cell[si];
-                f2c::types::LineString rev_line;
-                rev_line.addPoint(sw.endPoint());
-                rev_line.addPoint(sw.startPoint());
-                f2c::types::Swath rev_sw(rev_line, sw.getWidth(), sw.getId(), sw.getType());
-                reversed.push_back(rev_sw);
-            }
-            selected_cell = reversed;
+        if (choice.cost >= std::numeric_limits<double>::max() * 0.5) {
+            // 正常流程不会产生空 Cell；防御性退出避免解引用空 Swath。
+            break;
         }
 
-        cur_x = next_x;
-        cur_y = next_y;
-        result.push_back(std::move(selected_cell));
+        const size_t selected_ci = choice.cell_index;
+        visited[selected_ci] = true;
+        new_order.push_back(selected_ci);
+        swaths_by_cells[selected_ci] = std::move(choice.swaths);
+
+        const auto& selected_cell = swaths_by_cells[selected_ci];
+        if (selected_cell.size() > 0) {
+            const auto& last_swath = selected_cell.at(selected_cell.size() - 1);
+            cur_x = last_swath.endPoint().getX();
+            cur_y = last_swath.endPoint().getY();
+        }
+        result.push_back(selected_cell);
     }
 
     swaths_by_cells = result;

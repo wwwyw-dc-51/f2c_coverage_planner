@@ -2194,31 +2194,12 @@ private:
                 decomposition_outline_pubs_[index]->publish(d_outline);
             }
 
-            // ── Swath 排序（Snake/Boustrophedon/Spiral）──
+            // ── Swath 排序 + 贪心 Cell 排序（链式递推）──
+            // 走到哪个 Cell 才选择哪个 Cell 的合法入口变体，既利用上游
+            // 真实出口缩短连接，又保留 F2C 的规则内部覆盖顺序。
             if (swath_order_type_ != "none") {
-                for (size_t ci = 0; ci < swaths_by_cells.size(); ++ci) {
-                    auto& cell_sw = swaths_by_cells.at(ci);
-                    f2c::types::Swaths sorted;
-                    if (swath_order_type_ == "snake") {
-                        f2c::rp::SnakeOrder sorter;
-                        sorted = sorter.genSortedSwaths(cell_sw);
-                    } else if (swath_order_type_ == "spiral") {
-                        f2c::rp::SpiralOrder sorter(6);
-                        sorted = sorter.genSortedSwaths(cell_sw);
-                    } else {
-                        f2c::rp::BoustrophedonOrder sorter;
-                        sorted = sorter.genSortedSwaths(cell_sw);
-                    }
-                    cell_sw = sorted;
-                }
-                RCLCPP_INFO(this->get_logger(),
-                    "Swath order: %s applied to %zu cells",
-                    swath_order_type_.c_str(), swaths_by_cells.size());
-
-                // ── 贪心 Cell 排序：根据 swath 端点动态决定遍历顺序 ──
-                // 从 C0 出发，每次选择端点最近的未访问 cell，支持自动翻转 swath 方向。
-                // 替代原来的圆形排序 + 连接优化，更加"随机应变"。
-                yingshi::greedyCellOrder(swaths_by_cells, cell_order, hole_rings);
+                yingshi::greedyCellOrder(swaths_by_cells, cell_order, hole_rings,
+                                         swath_order_type_);
                 {
                     std::ostringstream order_str;
                     for (size_t i = 0; i < cell_order.size(); ++i) {
@@ -2535,77 +2516,22 @@ private:
                            "Boundary strategy [%s]: adjusting swath endpoints by %.3f m (%s)...",
                            boundary_type_.c_str(), effective_margin, direction);
 
-                // 逐 swath 判断：外环近→减半缩进(贴边覆盖)，孔洞近→加倍缩进(防撞)
+                // 每个端点独立判断外环/孔洞净空，避免 swath 中点靠近孔洞时
+                // 把远离孔洞、原本可贴近外边界的两个端点一起缩短。
                 const auto& outer_ring = cell.getExteriorRing();
-                // 收集所有孔洞环
                 std::vector<f2c::types::LinearRing> hole_rings;
                 for (size_t hi = 0; hi + 1 < cell.size(); ++hi) {
                     hole_rings.push_back(cell.getInteriorRing(hi));
                 }
-                // 点到环的最近距离（点到边段的距离，非点到顶点）
-                auto minDistToRing = [&](double px, double py,
-                                         const f2c::types::LinearRing& ring) {
-                    double md = std::numeric_limits<double>::max();
-                    size_t n = ring.size();
-                    for (size_t pi = 0; pi + 1 < n; ++pi) {
-                        double ax = ring.getGeometry(pi).getX();
-                        double ay = ring.getGeometry(pi).getY();
-                        double bx = ring.getGeometry(pi + 1).getX();
-                        double by = ring.getGeometry(pi + 1).getY();
-                        double abx = bx - ax, aby = by - ay;
-                        double len2 = abx*abx + aby*aby;
-                        if (len2 < 1e-18) {
-                            // 退化边，按顶点距离
-                            double d = std::hypot(px - ax, py - ay);
-                            if (d < md) md = d;
-                            continue;
-                        }
-                        double t = ((px - ax)*abx + (py - ay)*aby) / len2;
-                        double cx, cy;
-                        if (t < 0.0)      { cx = ax; cy = ay; }
-                        else if (t > 1.0) { cx = bx; cy = by; }
-                        else              { cx = ax + t*abx; cy = ay + t*aby; }
-                        double d = std::hypot(px - cx, py - cy);
-                        if (d < md) md = d;
-                    }
-                    return md;
-                };
                 for (size_t i = 0; i < route.sizeVectorSwaths(); ++i) {
                     f2c::types::Swaths& route_swaths = route.getSwaths(i);
                     f2c::types::Swaths adjusted_swaths;
                     for (size_t j = 0; j < route_swaths.size(); ++j) {
                         const auto& swath = route_swaths.at(j);
-                        double sx = swath.startPoint().getX();
-                        double sy = swath.startPoint().getY();
-                        double ex = swath.endPoint().getX();
-                        double ey = swath.endPoint().getY();
-                        double mx = (sx + ex) * 0.5;
-                        double my = (sy + ey) * 0.5;
-                        // 外环距离
-                        double d_outer = std::min({
-                            minDistToRing(sx, sy, outer_ring),
-                            minDistToRing(ex, ey, outer_ring),
-                            minDistToRing(mx, my, outer_ring)});
-                        // 孔洞环最小距离
-                        double d_hole = std::numeric_limits<double>::max();
-                        for (const auto& hr : hole_rings) {
-                            d_hole = std::min(d_hole,
-                                minDistToRing(sx, sy, hr));
-                            d_hole = std::min(d_hole,
-                                minDistToRing(ex, ey, hr));
-                            d_hole = std::min(d_hole,
-                                minDistToRing(mx, my, hr));
-                        }
-                        bool near_boundary = (d_outer < 2.0 * coverage_width_);
-                        bool near_hole = (d_hole < 2.0 * coverage_width_);
-                        double swath_margin = effective_margin;
-                        if (near_hole) {
-                            swath_margin *= 2.0;  // 孔洞优先：远离
-                        } else if (near_boundary) {
-                            swath_margin = 0.0;   // 贴外边界：headland已留够转弯空间，不再额外缩
-                        }
-                        f2c::types::Swath adjusted = adjustSwathEndpoints(swath, swath_margin);
-                        adjusted_swaths.push_back(adjusted);
+                        adjusted_swaths.push_back(
+                            yingshi::adjustSwathEndpointsForBoundaryClearance(
+                                swath, outer_ring, hole_rings,
+                                coverage_width_, effective_margin));
                     }
 
                     route.setSwaths(i, adjusted_swaths);

@@ -26,6 +26,15 @@ void fillBoundaryGaps(
     double shrink_dist,
     double robot_half_width = 0.0);
 
+// 按端点分别计算外边界/孔洞净空并调整 swath，避免中点靠近孔洞时
+// 错误地同时缩短两个远离孔洞的安全端点。
+f2c::types::Swath adjustSwathEndpointsForBoundaryClearance(
+    const f2c::types::Swath& swath,
+    const f2c::types::LinearRing& outer_ring,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double coverage_width,
+    double default_margin);
+
 // 从全部 Cell 的 swath 中删除功能性重复的内部接缝补线。
 // 仅当接缝两侧原有 swath 的总间距不超过覆盖宽度加容差时删除；
 // 真正超过覆盖能力的缺口仍保留一条补线。返回删除数量。

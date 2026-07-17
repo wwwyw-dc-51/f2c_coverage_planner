@@ -86,6 +86,93 @@ bool segmentCrossesHole(double x0, double y0, double x1, double y1,
     return false;
 }
 
+namespace {
+
+double pointToRingDistance(
+    double px, double py, const f2c::types::LinearRing& ring)
+{
+    double min_distance = std::numeric_limits<double>::max();
+    for (size_t i = 0; i + 1 < ring.size(); ++i) {
+        const double ax = ring.getGeometry(i).getX();
+        const double ay = ring.getGeometry(i).getY();
+        const double bx = ring.getGeometry(i + 1).getX();
+        const double by = ring.getGeometry(i + 1).getY();
+        const double dx = bx - ax;
+        const double dy = by - ay;
+        const double length_squared = dx * dx + dy * dy;
+        if (length_squared < 1e-18) {
+            min_distance = std::min(
+                min_distance, std::hypot(px - ax, py - ay));
+            continue;
+        }
+        const double projection = std::clamp(
+            ((px - ax) * dx + (py - ay) * dy) / length_squared,
+            0.0, 1.0);
+        const double closest_x = ax + projection * dx;
+        const double closest_y = ay + projection * dy;
+        min_distance = std::min(
+            min_distance, std::hypot(px - closest_x, py - closest_y));
+    }
+    return min_distance;
+}
+
+}  // namespace
+
+f2c::types::Swath adjustSwathEndpointsForBoundaryClearance(
+    const f2c::types::Swath& swath,
+    const f2c::types::LinearRing& outer_ring,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double coverage_width,
+    double default_margin)
+{
+    if (default_margin == 0.0 || coverage_width <= 0.0) return swath;
+
+    const auto start = swath.startPoint();
+    const auto end = swath.endPoint();
+    const double dx = end.getX() - start.getX();
+    const double dy = end.getY() - start.getY();
+    const double length = std::hypot(dx, dy);
+    if (length < 1e-9) return swath;
+
+    const double proximity_threshold = 2.0 * coverage_width;
+    const auto endpointMargin = [&](const f2c::types::Point& endpoint) {
+        double hole_distance = std::numeric_limits<double>::max();
+        for (const auto& hole : hole_rings) {
+            hole_distance = std::min(
+                hole_distance,
+                pointToRingDistance(
+                    endpoint.getX(), endpoint.getY(), hole));
+        }
+        if (hole_distance < proximity_threshold) {
+            // 开放边界也不能把端点向孔洞延伸，孔洞侧始终使用正净空。
+            return 2.0 * std::abs(default_margin);
+        }
+
+        const double outer_distance = pointToRingDistance(
+            endpoint.getX(), endpoint.getY(), outer_ring);
+        if (outer_distance < proximity_threshold) return 0.0;
+        return default_margin;
+    };
+
+    const double start_margin = endpointMargin(start);
+    const double end_margin = endpointMargin(end);
+    if (length - start_margin - end_margin <= 1e-9) return swath;
+
+    const double unit_x = dx / length;
+    const double unit_y = dy / length;
+    f2c::types::LineString adjusted_path;
+    adjusted_path.addPoint(f2c::types::Point(
+        start.getX() + start_margin * unit_x,
+        start.getY() + start_margin * unit_y));
+    adjusted_path.addPoint(f2c::types::Point(
+        end.getX() - end_margin * unit_x,
+        end.getY() - end_margin * unit_y));
+    f2c::types::Swath adjusted(
+        adjusted_path, swath.getWidth(), swath.getId(), swath.getType());
+    adjusted.setCreationDir(swath.getCreationDir());
+    return adjusted;
+}
+
 // ========== 边界间隙补填（完整版，v8/v9 成熟实现）==========
 void fillBoundaryGaps(
     f2c::types::Swaths& cell_swaths,
@@ -190,10 +277,11 @@ void fillBoundaryGaps(
             bline.addPoint(f2c::types::Point(px1 + boundary_offset * n_x, py1 + boundary_offset * n_y));
             bline.addPoint(f2c::types::Point(px2 + boundary_offset * n_x, py2 + boundary_offset * n_y));
 
-            // 裁剪到多边形内 + 排除孔洞
-            f2c::types::Cells poly_tmp;
-            poly_tmp.addGeometry(full_polygon);
-            auto inside = poly_tmp.getLinesInside(bline);
+            // 纵向端点必须受当前 cell 约束。若按完整 polygon 裁剪，补线会比
+            // 相邻普通 swath 多伸出一截，Route 连接就会先反向再斜接形成毛刺。
+            f2c::types::Cells cell_tmp;
+            cell_tmp.addGeometry(cell);
+            auto inside = cell_tmp.getLinesInside(bline);
 
             for (size_t li = 0; li < inside.size(); ++li) {
                 auto seg = inside.getGeometry(li);
