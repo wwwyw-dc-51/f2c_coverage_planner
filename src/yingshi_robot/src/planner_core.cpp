@@ -288,6 +288,10 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
             countCrossings(result.path_points, req.holes);
         result.path_has_crossings =
             (result.hole_crossing_segments > 0);
+        if (result.path_has_crossings) {
+            result.error_message =
+                "Planned path crosses obstacle holes";
+        }
 
         // ── 12. 组装结果 ──
         result.cells_with_swaths = swaths_by_cells;
@@ -295,7 +299,7 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
         result.cell_order = cell_order;
         result.total_swaths = swaths_by_cells.sizeTotal();
         result.total_connections = route.sizeConnections();
-        result.success = true;
+        result.success = !result.path_has_crossings;
 
     } catch (const std::exception& e) {
         result.success = false;

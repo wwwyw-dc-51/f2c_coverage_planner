@@ -6,6 +6,7 @@
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_planner.hpp"
+#include "yingshi_robot/path_sanity_check.hpp"
 #include "yingshi_robot/swath_generator.hpp"
 
 namespace {
@@ -731,6 +732,34 @@ TEST(HoleGeometry, DetectsAShortSegmentThatCrossesAHoleBoundary)
 
     EXPECT_TRUE(yingshi::segmentCrossesHole(
         -1e-6, 0.5, 1e-6, 0.5, {hole}, 10));
+}
+
+TEST(PathSanity, TreatsHoleCrossingAsAPublishBlockingError)
+{
+    auto polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(4.0, 4.0),
+        f2c::types::Point(6.0, 4.0),
+        f2c::types::Point(6.0, 6.0),
+        f2c::types::Point(4.0, 6.0),
+    });
+    polygon.addRing(hole);
+    const std::vector<f2c::types::Point> crossing_path {
+        f2c::types::Point(1.0, 5.0),
+        f2c::types::Point(9.0, 5.0),
+    };
+
+    const auto sanity = yingshi::checkPathSanity(
+        f2c::types::Path(), crossing_path, polygon, {hole}, 1U);
+
+    ASSERT_FALSE(sanity.passed);
+    ASSERT_FALSE(sanity.issues.empty());
+    EXPECT_TRUE(std::any_of(
+        sanity.issues.begin(), sanity.issues.end(),
+        [](const yingshi::SanityIssue& issue) {
+            return issue.severity ==
+                yingshi::SanityIssue::Severity::ERROR;
+        }));
 }
 
 }  // namespace

@@ -1528,6 +1528,10 @@ private:
                     else
                         RCLCPP_WARN(this->get_logger(), "Core Sanity: %s", iss.message.c_str());
                 }
+                RCLCPP_ERROR(this->get_logger(),
+                    "Core path rejected by publish safety gate");
+                clearPlanningCacheForPolygon(index, true);
+                return;
             }
         }
 
@@ -3339,6 +3343,10 @@ private:
                         else
                             RCLCPP_WARN(this->get_logger(), "Sanity: %s", iss.message.c_str());
                     }
+                    RCLCPP_ERROR(this->get_logger(),
+                        "Legacy path rejected by publish safety gate");
+                    clearPlanningCacheForPolygon(index, true);
+                    return;
                 }
             }
 

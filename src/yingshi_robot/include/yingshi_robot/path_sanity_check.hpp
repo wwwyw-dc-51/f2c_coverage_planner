@@ -92,7 +92,7 @@ inline PathSanityResult checkPathSanity(
         }
         if (crossings > 0) {
             result.passed = false;
-            result.issues.push_back({SanityIssue::Severity::WARN,
+            result.issues.push_back({SanityIssue::Severity::ERROR,
                 std::to_string(crossings) + " path segments cross holes"});
         }
     }
