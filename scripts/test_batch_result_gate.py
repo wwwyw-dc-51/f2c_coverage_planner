@@ -24,6 +24,17 @@ def valid_report():
             "planning_time_ms": 100.0,
             "net_area": 100.0,
         },
+        "cspace": {
+            "valid": True,
+            "original_area": 100.0,
+            "reachable_area": 99.5,
+            "excluded_area": 0.5,
+            "excluded_ratio": 0.005,
+            "max_ratio": 0.05,
+            "component_count": 1,
+            "requires_repositioning": False,
+            "gate": "PASS",
+        },
         "batch_status": {
             "plan_received": True,
             "evaluation_completed": True,
@@ -33,9 +44,48 @@ def valid_report():
     }
 
 
+def valid_multi_component_report():
+    report = valid_report()
+    report["path"] = []
+    report["component_paths"] = [
+        [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 0.0}],
+        [{"x": 5.0, "y": 0.0}, {"x": 6.0, "y": 0.0}],
+    ]
+    report["component_evals"] = [
+        dict(report["eval"]),
+        dict(report["eval"]),
+    ]
+    report["eval"] = {}
+    report["cspace"]["component_count"] = 2
+    report["cspace"]["requires_repositioning"] = True
+    return report
+
+
 class BatchResultGateTest(unittest.TestCase):
     def test_accepts_complete_report_at_coverage_threshold(self):
         self.assertEqual(validate_report(valid_report(), coverage_threshold=0.99), [])
+
+    def test_accepts_independent_multi_component_paths_and_evaluations(self):
+        self.assertEqual(validate_report(valid_multi_component_report()), [])
+
+    def test_rejects_missing_multi_component_path_or_evaluation(self):
+        for field_name in ("component_paths", "component_evals"):
+            with self.subTest(field_name=field_name):
+                report = valid_multi_component_report()
+                report[field_name].pop()
+
+                errors = validate_report(report)
+
+                self.assertTrue(any(field_name in error for error in errors))
+
+    def test_rejects_one_failing_component_evaluation(self):
+        report = valid_multi_component_report()
+        report["component_evals"][0]["coverage_rate"] = 98.0
+
+        errors = validate_report(report)
+
+        self.assertTrue(any(
+            "component_evals[0].coverage_rate" in error for error in errors))
 
     def test_rejects_report_below_coverage_threshold(self):
         report = valid_report()
@@ -107,6 +157,50 @@ class BatchResultGateTest(unittest.TestCase):
         errors = validate_report(report)
 
         self.assertTrue(any("turn_count" in error for error in errors))
+
+    def test_rejects_missing_or_failed_cspace_report(self):
+        for mutation in ("missing", "invalid", "failed_gate"):
+            with self.subTest(mutation=mutation):
+                report = valid_report()
+                if mutation == "missing":
+                    report.pop("cspace")
+                elif mutation == "invalid":
+                    report["cspace"]["valid"] = False
+                else:
+                    report["cspace"]["gate"] = "FAIL"
+
+                errors = validate_report(report)
+
+                self.assertTrue(any("cspace" in error for error in errors))
+
+    def test_rejects_cspace_area_or_ratio_inconsistency(self):
+        mutations = {
+            "area": ("reachable_area", 98.0),
+            "ratio": ("excluded_ratio", 0.50),
+            "limit": ("max_ratio", 0.001),
+        }
+        for mutation, (field, value) in mutations.items():
+            with self.subTest(mutation=mutation):
+                report = valid_report()
+                report["cspace"][field] = value
+
+                errors = validate_report(report)
+
+                self.assertTrue(any("cspace" in error for error in errors))
+
+    def test_requires_repositioning_exactly_for_multiple_components(self):
+        for component_count, repositioning in ((1, True), (2, False)):
+            with self.subTest(
+                    component_count=component_count,
+                    repositioning=repositioning):
+                report = valid_report()
+                report["cspace"]["component_count"] = component_count
+                report["cspace"]["requires_repositioning"] = repositioning
+
+                errors = validate_report(report)
+
+                self.assertTrue(any("requires_repositioning" in error
+                                    for error in errors))
 
     def test_cli_returns_nonzero_and_explains_rejected_report(self):
         report = valid_report()

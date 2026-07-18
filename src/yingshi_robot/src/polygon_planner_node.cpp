@@ -62,7 +62,10 @@ private:
     double decomposition_angle_;  // Boustrophedon 分解角度
     double mid_hl_width_ratio_;  // mid_hl 宽度比例（相对于覆盖宽度）
     double no_hl_width_ratio_;   // no_hl 宽度比例（相对于覆盖宽度）
-    double min_hole_area_;       // 最小 holes 面积阈值（平方米），小于此面积的 holes 将被剔除
+    double min_hole_area_;       // 兼容旧参数；物理障碍不再按面积静默过滤
+    bool traversability_enabled_;
+    double cspace_clearance_margin_;
+    double max_excluded_area_ratio_;
     double swath_endpoint_shrink_distance_;  // 条带端点向中心收缩的距离（米），用于留出机器人转向空间
 
     double min_swath_length_;
@@ -110,7 +113,10 @@ public:
         this->declare_parameter("decomposition_angle", 0.0);  // Boustrophedon 分解角度（弧度），默认0度（沿X轴方向）
         this->declare_parameter("mid_hl_width_ratio", 0.20);  // mid_hl 宽度比例（相对于覆盖宽度）
         this->declare_parameter("no_hl_width_ratio", 0.0);   // no_hl 宽度比例（相对于覆盖宽度）
-        this->declare_parameter("min_hole_area", 1.0);       // v9.7 验收基线；C-space 前处理会另行报告不可达小地块
+        this->declare_parameter("min_hole_area", 0.0);       // 已废弃：所有合法物理孔洞均保留
+        this->declare_parameter("traversability_enabled", true);
+        this->declare_parameter("cspace_clearance_margin", 0.0);
+        this->declare_parameter("max_excluded_area_ratio", 0.05);
         this->declare_parameter("swath_endpoint_shrink_distance", 0.03);  // 条带端点向中心收缩的距离（米），batch 实测最优值
 
         // 获取参数值并存储
@@ -219,6 +225,12 @@ public:
         RCLCPP_INFO(this->get_logger(), "mid_hl_width_ratio: %.2f", mid_hl_width_ratio_);
         RCLCPP_INFO(this->get_logger(), "no_hl_width_ratio: %.2f", no_hl_width_ratio_);
         RCLCPP_INFO(this->get_logger(), "min_hole_area: %.3f m²", min_hole_area_);
+        RCLCPP_INFO(this->get_logger(), "traversability_enabled: %s",
+                    traversability_enabled_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "cspace_clearance_margin: %.3f m",
+                    cspace_clearance_margin_);
+        RCLCPP_INFO(this->get_logger(), "max_excluded_area_ratio: %.2f%%",
+                    max_excluded_area_ratio_ * 100.0);
         RCLCPP_INFO(this->get_logger(), "swath_endpoint_shrink_distance: %.3f m", swath_endpoint_shrink_distance_);
         RCLCPP_INFO(this->get_logger(), "min_swath_length: %.3f m", min_swath_length_);
 
@@ -356,6 +368,8 @@ public:
 private:
     // 存储多个多边形的数据（使用数组索引0-3对应多边形1-4）
     std::array<nav_msgs::msg::Path, 4> last_paths_;           // 存储4个多边形的路径
+    std::array<std::vector<nav_msgs::msg::Path>, 4>
+        last_component_paths_;  // C-space 断开分量路径，不允许展平
     std::array<geometry_msgs::msg::PoseArray, 4> last_swath_points_;  // 存储4个多边形的航向线端点
     std::array<geometry_msgs::msg::PoseArray, 4> last_sampled_points_;  // 存储4个多边形的采样点
     std::array<geometry_msgs::msg::Polygon, 4> last_polygons_;  // 存储4个多边形
@@ -377,6 +391,9 @@ private:
     std::vector<rclcpp::Subscription<geometry_msgs::msg::Polygon>::SharedPtr> polygon_subs_;
     std::vector<rclcpp::Subscription<geometry_msgs::msg::Polygon>::SharedPtr> holes_subs_;
     std::vector<rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr> path_pubs_;
+    std::array<
+        std::vector<rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr>, 4>
+        component_path_pubs_;
     std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr> swath_points_pubs_;
     std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr> sampled_path_pubs_;
     std::vector<rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr> polygon_viz_pubs_;
@@ -394,6 +411,9 @@ private:
         double mid_hl_width_ratio;
         double no_hl_width_ratio;
         double min_hole_area;
+        bool traversability_enabled;
+        double cspace_clearance_margin;
+        double max_excluded_area_ratio;
         double swath_endpoint_shrink_distance;
         double min_swath_length;
         bool eval_enable_report;
@@ -469,6 +489,10 @@ private:
         config.runtime.mid_hl_width_ratio = state.mid_hl_width_ratio;
         config.runtime.no_hl_width_ratio = state.no_hl_width_ratio;
         config.runtime.min_hole_area = state.min_hole_area;
+        config.runtime.cspace_clearance_margin =
+            state.cspace_clearance_margin;
+        config.runtime.max_excluded_area_ratio =
+            state.max_excluded_area_ratio;
         config.runtime.eval_grid_resolution = state.eval_grid_resolution;
         config.runtime.eval_coverage_threshold =
             state.eval_coverage_threshold;
@@ -526,6 +550,12 @@ private:
         state.mid_hl_width_ratio = get_double("mid_hl_width_ratio");
         state.no_hl_width_ratio = get_double("no_hl_width_ratio");
         state.min_hole_area = get_double("min_hole_area");
+        state.traversability_enabled =
+            get_bool("traversability_enabled");
+        state.cspace_clearance_margin =
+            get_double("cspace_clearance_margin");
+        state.max_excluded_area_ratio =
+            get_double("max_excluded_area_ratio");
         state.swath_endpoint_shrink_distance =
             get_double("swath_endpoint_shrink_distance");
         state.min_swath_length = get_double("min_swath_length");
@@ -581,6 +611,9 @@ private:
         mid_hl_width_ratio_ = state.mid_hl_width_ratio;
         no_hl_width_ratio_ = state.no_hl_width_ratio;
         min_hole_area_ = state.min_hole_area;
+        traversability_enabled_ = state.traversability_enabled;
+        cspace_clearance_margin_ = state.cspace_clearance_margin;
+        max_excluded_area_ratio_ = state.max_excluded_area_ratio;
         swath_endpoint_shrink_distance_ =
             state.swath_endpoint_shrink_distance;
         min_swath_length_ = state.min_swath_length;
@@ -625,6 +658,9 @@ private:
             state.mid_hl_width_ratio == mid_hl_width_ratio_ &&
             state.no_hl_width_ratio == no_hl_width_ratio_ &&
             state.min_hole_area == min_hole_area_ &&
+            state.traversability_enabled == traversability_enabled_ &&
+            state.cspace_clearance_margin == cspace_clearance_margin_ &&
+            state.max_excluded_area_ratio == max_excluded_area_ratio_ &&
             state.swath_endpoint_shrink_distance ==
                 swath_endpoint_shrink_distance_ &&
             state.min_swath_length == min_swath_length_ &&
@@ -703,6 +739,9 @@ private:
         empty_pose_array.header.stamp = this->now();
 
         path_pubs_[index]->publish(empty_path);
+        for (const auto& publisher : component_path_pubs_[index]) {
+            publisher->publish(empty_path);
+        }
         swath_points_pubs_[index]->publish(empty_pose_array);
         sampled_path_pubs_[index]->publish(empty_pose_array);
         polygon_viz_pubs_[index]->publish(empty_path);
@@ -717,6 +756,7 @@ private:
         }
 
         last_paths_[index] = nav_msgs::msg::Path();
+        last_component_paths_[index].clear();
         last_swath_points_[index] = geometry_msgs::msg::PoseArray();
         last_sampled_points_[index] = geometry_msgs::msg::PoseArray();
         last_polygons_[index] = geometry_msgs::msg::Polygon();
@@ -730,6 +770,7 @@ private:
         if (publish_empty_outputs) {
             publishEmptyPlanningOutputs(index);
         }
+        component_path_pubs_[index].clear();
 
         // 清除 RViz 中的旧 marker（掉头标记等）
         {
@@ -1104,6 +1145,14 @@ private:
                 // 保留原始规划时间戳，不刷新——旧计划不得伪装成新计划。
                 path_pubs_[i]->publish(last_paths_[i]);
             }
+            for (std::size_t component = 0;
+                 component < last_component_paths_[i].size() &&
+                 component < component_path_pubs_[i].size(); ++component) {
+                if (!last_component_paths_[i][component].poses.empty()) {
+                    component_path_pubs_[i][component]->publish(
+                        last_component_paths_[i][component]);
+                }
+            }
             if (!last_swath_points_[i].poses.empty()) {
                 swath_points_pubs_[i]->publish(last_swath_points_[i]);
             }
@@ -1184,32 +1233,6 @@ private:
         
         // 返回绝对值的一半
         return std::abs(area) / 2.0;
-    }
-
-    // 过滤 holes，剔除面积小于阈值的
-    std::vector<geometry_msgs::msg::Polygon> filterHolesByArea(
-        const std::vector<geometry_msgs::msg::Polygon>& holes, 
-        double min_area) const
-    {
-        std::vector<geometry_msgs::msg::Polygon> filtered_holes;
-        
-        for (size_t i = 0; i < holes.size(); ++i) {
-            const auto& hole = holes[i];
-            double area = calculatePolygonArea(hole);
-            
-            if (area >= min_area) {
-                filtered_holes.push_back(hole);
-                RCLCPP_DEBUG(this->get_logger(), 
-                           "Hole %zu: area=%.3f m² (>= %.3f m²), kept", 
-                           i, area, min_area);
-            } else {
-                RCLCPP_INFO(this->get_logger(), 
-                           "Hole %zu: area=%.3f m² (< %.3f m²), filtered out", 
-                           i, area, min_area);
-            }
-        }
-        
-        return filtered_holes;
     }
 
     nav_msgs::msg::Path createHolesOutlinePath(const std::vector<geometry_msgs::msg::Polygon>& holes)
@@ -1374,13 +1397,14 @@ private:
                    "  Total area of all holes: %.3f m²", total_area);
         RCLCPP_INFO(this->get_logger(), "========================================");
         
-        // 过滤holes：剔除面积小于阈值的
-        std::vector<geometry_msgs::msg::Polygon> filtered_holes = filterHolesByArea(holes, min_hole_area_);
-        
-        RCLCPP_INFO(this->get_logger(), 
-                   "After filtering (min_area=%.3f m²): %zu holes kept, %zu holes filtered out", 
-                   min_hole_area_, filtered_holes.size(), 
-                   holes.size() - filtered_holes.size());
+        // 物理障碍不能按面积静默删除；旧参数仅保留启动兼容。
+        std::vector<geometry_msgs::msg::Polygon> filtered_holes = holes;
+        if (min_hole_area_ > 0.0) {
+            RCLCPP_WARN(this->get_logger(),
+                "min_hole_area=%.3f is deprecated and ignored; "
+                "all %zu valid physical holes are preserved",
+                min_hole_area_, holes.size());
+        }
         
         // 保存过滤后的holes
         last_holes_[index] = filtered_holes;
@@ -1678,6 +1702,132 @@ private:
 
     // ========== PlannerCore 桥接（P2 迁移）==========
 
+    void ensureComponentPathPublishers(int polygon_index, std::size_t count)
+    {
+        auto& publishers = component_path_pubs_[polygon_index];
+        while (publishers.size() < count) {
+            const std::size_t component_index = publishers.size();
+            publishers.push_back(
+                this->create_publisher<nav_msgs::msg::Path>(
+                    "planned2_path_" +
+                        std::to_string(polygon_index + 1) +
+                        "_component_" +
+                        std::to_string(component_index + 1),
+                    rclcpp::QoS(10).transient_local()));
+        }
+    }
+
+    nav_msgs::msg::Path makePathMessage(
+        const f2c::types::Path& path)
+    {
+        nav_msgs::msg::Path message;
+        message.header.frame_id = "map";
+        message.header.stamp = this->now();
+        const auto waypoints = yingshi::materializePathWaypoints(path);
+        for (const auto& waypoint : waypoints) {
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header = message.header;
+            pose.pose.position.x = waypoint.point.getX();
+            pose.pose.position.y = waypoint.point.getY();
+            pose.pose.position.z = 0.0;
+            pose.pose.orientation.w = std::cos(waypoint.angle / 2.0);
+            pose.pose.orientation.z = std::sin(waypoint.angle / 2.0);
+            message.poses.push_back(pose);
+        }
+        return message;
+    }
+
+    void writeCoreVisualizationArtifact(
+        const yingshi::PlanningResult& result,
+        const f2c::types::Swaths& all_swaths,
+        int polygon_id)
+    {
+        std::ostringstream json;
+        json << std::setprecision(12);
+        json << "{\n  \"path\": [";
+        if (result.component_plans.size() == 1) {
+            const auto& points = result.component_plans.front().path_points;
+            for (std::size_t i = 0; i < points.size(); ++i) {
+                if (i > 0) json << ",";
+                json << "\n    {\"x\":" << points[i].getX()
+                     << ",\"y\":" << points[i].getY() << "}";
+            }
+            if (!points.empty()) json << "\n  ";
+        }
+        json << "],\n  \"component_paths\": [";
+        for (std::size_t component_index = 0;
+             component_index < result.component_plans.size();
+             ++component_index) {
+            if (component_index > 0) json << ",";
+            json << "\n    [";
+            const auto& points =
+                result.component_plans[component_index].path_points;
+            for (std::size_t point = 0; point < points.size(); ++point) {
+                if (point > 0) json << ",";
+                json << "{\"x\":" << points[point].getX()
+                     << ",\"y\":" << points[point].getY() << "}";
+            }
+            json << "]";
+        }
+        if (!result.component_plans.empty()) json << "\n  ";
+        json << "],\n  \"swaths\": [";
+        for (std::size_t i = 0; i < all_swaths.size(); ++i) {
+            if (i > 0) json << ",";
+            const auto& swath = all_swaths.at(i);
+            json << "\n    {\"points\":[{\"x\":"
+                 << swath.startPoint().getX() << ",\"y\":"
+                 << swath.startPoint().getY() << "},{\"x\":"
+                 << swath.endPoint().getX() << ",\"y\":"
+                 << swath.endPoint().getY() << "}]}";
+        }
+        if (all_swaths.size() > 0) json << "\n  ";
+        json << "],\n  \"cells\": [";
+        for (std::size_t component_index = 0;
+             component_index < result.component_plans.size();
+             ++component_index) {
+            if (component_index > 0) json << ",";
+            const auto& component = result.component_plans[component_index];
+            const auto& ring =
+                component.planning_polygon.getExteriorRing();
+            json << "\n    {\"id\":" << component_index
+                 << ",\"boundary\":[";
+            for (std::size_t point = 0; point < ring.size(); ++point) {
+                if (point > 0) json << ",";
+                json << "[" << ring.getGeometry(point).getX()
+                     << "," << ring.getGeometry(point).getY() << "]";
+            }
+            json << "],\"swath_count\":" << component.total_swaths
+                 << ",\"area\":"
+                 << component.planning_polygon.area() << "}";
+        }
+        if (!result.component_plans.empty()) json << "\n  ";
+        json << "],\n  \"connections\": [],\n  \"cspace\": {"
+             << "\"valid\":"
+             << (result.traversability.analysis_valid ? "true" : "false")
+             << ",\"original_area\":"
+             << result.traversability.original_area
+             << ",\"reachable_area\":"
+             << result.traversability.reachable_area
+             << ",\"excluded_area\":"
+             << result.traversability.excluded_area
+             << ",\"excluded_ratio\":"
+             << result.traversability.excluded_area_ratio
+             << ",\"component_count\":"
+             << result.traversability.component_count
+             << ",\"requires_repositioning\":"
+             << (result.traversability.requires_repositioning
+                    ? "true" : "false")
+             << "}\n}\n";
+
+        yingshi::FileSink sink(output_dir_);
+        const std::string filename = "f2c_vis_polygon_" +
+            std::to_string(polygon_id) + ".json";
+        sink.write(filename, json.str());
+        RCLCPP_INFO(this->get_logger(),
+            "Core visualization artifact saved: %s/%s",
+            output_dir_.c_str(), filename.c_str());
+    }
+
     // 从当前 ROS 参数和消息构建纯算法请求
     yingshi::PlanningRequest buildPlanningRequest(
         const geometry_msgs::msg::Polygon& polygon_msg,
@@ -1757,6 +1907,11 @@ private:
         req.boundary_coverage_margin = boundary_coverage_margin_;
         req.boundary_open_default_margin = boundary_open_default_margin_;
 
+        // C-space 前处理
+        req.traversability_enabled = traversability_enabled_;
+        req.cspace_clearance_margin = cspace_clearance_margin_;
+        req.max_excluded_area_ratio = max_excluded_area_ratio_;
+
         return req;
     }
 
@@ -1767,12 +1922,36 @@ private:
     {
         int index = polygon_id - 1;
         auto planning_start = std::chrono::steady_clock::now();
+        try {
 
         // 1. 构建纯算法请求
         auto req = buildPlanningRequest(polygon, polygon_id);
 
         // 2. 执行规划
         auto result = core_.plan(req);
+
+        if (req.traversability_enabled) {
+            const auto& report = result.traversability;
+            if (report.analysis_valid) {
+                RCLCPP_INFO(this->get_logger(),
+                    "CSPACE_REPORT polygon=%d valid=true "
+                    "original_area=%.6f reachable_area=%.6f "
+                    "excluded_area=%.6f excluded_ratio=%.9f "
+                    "max_ratio=%.9f components=%zu "
+                    "requires_repositioning=%s gate=%s",
+                    polygon_id, report.original_area,
+                    report.reachable_area, report.excluded_area,
+                    report.excluded_area_ratio,
+                    req.max_excluded_area_ratio,
+                    report.component_count,
+                    report.requires_repositioning ? "true" : "false",
+                    report.exclusion_limit_exceeded ? "FAIL" : "PASS");
+            } else {
+                RCLCPP_ERROR(this->get_logger(),
+                    "CSPACE_REPORT polygon=%d valid=false error=%s",
+                    polygon_id, report.error_message.c_str());
+            }
+        }
 
         if (!result.success) {
             RCLCPP_ERROR(this->get_logger(),
@@ -1792,33 +1971,28 @@ private:
                 result.hole_crossing_segments);
         }
 
-        // 3. 发布 nav_msgs::Path（从 F2C Path 完整还原，含角度）
-        nav_msgs::msg::Path path_msg;
-        path_msg.header.frame_id = "map";
-        path_msg.header.stamp = this->now();
-
-        const auto path_waypoints = yingshi::materializePathWaypoints(result.path);
-        for (const auto& wp : path_waypoints) {
-            geometry_msgs::msg::PoseStamped ps;
-            ps.header = path_msg.header;
-            ps.pose.position.x = wp.point.getX();
-            ps.pose.position.y = wp.point.getY();
-            ps.pose.position.z = 0.0;
-            ps.pose.orientation.w = std::cos(wp.angle / 2.0);
-            ps.pose.orientation.z = std::sin(wp.angle / 2.0);
-            path_msg.poses.push_back(ps);
+        if (result.component_plans.empty()) {
+            RCLCPP_ERROR(this->get_logger(),
+                "PlannerCore returned success without component paths");
+            clearPlanningCacheForPolygon(index, true);
+            return;
         }
 
-        // 发布前自洽性检查
-        {
+        // 3. 每个中心可达分量独立执行发布前安全检查。
+        std::vector<nav_msgs::msg::Path> component_messages;
+        component_messages.reserve(result.component_plans.size());
+        std::size_t published_waypoint_count = 0;
+        for (const auto& component : result.component_plans) {
             std::vector<f2c::types::LinearRing> sanity_holes;
-            for (const auto& hole : last_holes_[index]) {
-                auto hr = makeClosedF2CRing(hole);
-                if (hr.size() >= 4) sanity_holes.push_back(hr);
+            for (std::size_t hole = 0;
+                 hole + 1 < component.planning_polygon.size(); ++hole) {
+                sanity_holes.push_back(
+                    component.planning_polygon.getInteriorRing(hole));
             }
             auto sanity = yingshi::checkPathSanity(
-                result.path, result.path_points, req.polygon,
-                sanity_holes, result.total_swaths);
+                component.path, component.path_points,
+                component.planning_polygon, sanity_holes,
+                component.total_swaths);
             if (!sanity.passed) {
                 for (const auto& iss : sanity.issues) {
                     if (iss.severity == yingshi::SanityIssue::Severity::ERROR)
@@ -1831,23 +2005,64 @@ private:
                 clearPlanningCacheForPolygon(index, true);
                 return;
             }
+            component_messages.push_back(
+                makePathMessage(component.path));
+            published_waypoint_count +=
+                component_messages.back().poses.size();
         }
 
-        last_paths_[index] = path_msg;
-        path_pubs_[index]->publish(path_msg);
+        nav_msgs::msg::Path empty_path;
+        empty_path.header.frame_id = "map";
+        empty_path.header.stamp = this->now();
+        if (component_messages.size() == 1) {
+            last_paths_[index] = component_messages.front();
+            path_pubs_[index]->publish(last_paths_[index]);
+            last_component_paths_[index].clear();
+            for (const auto& publisher : component_path_pubs_[index]) {
+                publisher->publish(empty_path);
+            }
+            component_path_pubs_[index].clear();
+        } else {
+            last_paths_[index] = empty_path;
+            path_pubs_[index]->publish(empty_path);
+            ensureComponentPathPublishers(
+                index, component_messages.size());
+            last_component_paths_[index] = component_messages;
+            for (std::size_t component = 0;
+                 component < component_messages.size(); ++component) {
+                component_path_pubs_[index][component]->publish(
+                    component_messages[component]);
+            }
+            for (std::size_t component = component_messages.size();
+                 component < component_path_pubs_[index].size();
+                 ++component) {
+                component_path_pubs_[index][component]->publish(empty_path);
+            }
+            component_path_pubs_[index].resize(
+                component_messages.size());
+            RCLCPP_WARN(this->get_logger(),
+                "C-space split polygon_%d into %zu independent paths; "
+                "robot repositioning is required between component topics",
+                polygon_id, component_messages.size());
+        }
 
         // 4. 发布 swath 端点（可视化）
         geometry_msgs::msg::PoseArray swath_pts;
         swath_pts.header.frame_id = "map";
         swath_pts.header.stamp = this->now();
 
-        // 从 Route 提取 swaths
+        // 从各分量 Route 提取 swaths；只合并可视化点，不构造跨区路径。
         f2c::types::Swaths all_swaths;
-        for (size_t i = 0; i < result.route.sizeVectorSwaths(); ++i) {
-            const auto& rs = result.route.getSwaths(i);
-            for (size_t j = 0; j < rs.size(); ++j)
-                all_swaths.push_back(rs.at(j));
+        for (const auto& component : result.component_plans) {
+            for (size_t i = 0;
+                 i < component.route.sizeVectorSwaths(); ++i) {
+                const auto& swaths = component.route.getSwaths(i);
+                for (size_t j = 0; j < swaths.size(); ++j) {
+                    all_swaths.push_back(swaths.at(j));
+                }
+            }
         }
+        writeCoreVisualizationArtifact(result, all_swaths, polygon_id);
 
         for (const auto& sw : all_swaths) {
             geometry_msgs::msg::Pose sp, ep;
@@ -1908,58 +2123,15 @@ private:
             last_infeasible_turn_markers_[index] = visualization_msgs::msg::Marker();
         }
 
-        // 7. 孔洞交叉诊断
-        if (!last_holes_[index].empty()) {
-            std::vector<f2c::types::LinearRing> hole_rings;
-            for (const auto& hole : last_holes_[index]) {
-                auto hr = makeClosedF2CRing(hole);
-                if (hr.size() >= 4) hole_rings.push_back(hr);
-            }
-            if (!hole_rings.empty()) {
-                size_t pts_in_hole = 0, segs_crossing = 0;
-                for (const auto& pt : result.path_points) {
-                    if (yingshi::pointInAnyHole(pt.getX(), pt.getY(), hole_rings))
-                        ++pts_in_hole;
-                }
-                for (size_t si = 0; si + 1 < result.path_points.size(); ++si) {
-                    if (yingshi::segmentCrossesHole(
-                            result.path_points[si].getX(), result.path_points[si].getY(),
-                            result.path_points[si+1].getX(), result.path_points[si+1].getY(),
-                            hole_rings, 50))
-                        ++segs_crossing;
-                }
-                RCLCPP_INFO(this->get_logger(),
-                    "  Core path (%zu pts): %zu pts in hole, %zu segs crossing",
-                    result.path_points.size(), pts_in_hole, segs_crossing);
-                if (segs_crossing > 0) {
-                    RCLCPP_WARN(this->get_logger(),
-                        "⚠ CORE PATH CROSSES HOLE! (%zu segments)", segs_crossing);
-                }
-            }
-        }
+        // 7. Core 已对每个分量做完整线段安全门，这里只输出聚合诊断。
+        RCLCPP_INFO(this->get_logger(),
+            "Core safety: hole_crossings=%zu, cspace_excursions=%zu",
+            result.hole_crossing_segments,
+            result.out_of_planning_area_segments);
 
         // 8. 评估（复用 PlannerCore 结果，重建需要的中间变量）
 #if YINGSHI_EVAL_ENABLED
         if (eval_enable_report_) {
-            // 构建 full_polygon Cells（含孔洞内环）
-            f2c::types::Cells full_polygon_cells;
-            full_polygon_cells.addGeometry(req.polygon);
-
-            // 构建孔洞环
-            std::vector<f2c::types::LinearRing> eval_hole_rings;
-            for (const auto& hole : last_holes_[index]) {
-                auto hr = makeClosedF2CRing(hole);
-                if (hr.size() >= 4) eval_hole_rings.push_back(hr);
-            }
-
-            // 从 Route 提取所有 swaths
-            f2c::types::Swaths eval_swaths;
-            for (size_t i = 0; i < result.route.sizeVectorSwaths(); ++i) {
-                const auto& rs = result.route.getSwaths(i);
-                for (size_t j = 0; j < rs.size(); ++j)
-                    eval_swaths.push_back(rs.at(j));
-            }
-
             EvalParams eval_params;
             eval_params.max_diff_curv = max_diff_curv_;
             eval_params.coverage_width = coverage_width_;
@@ -1970,31 +2142,73 @@ private:
             eval_params.turn_angle_threshold = 30.0;
             eval_params.use_grid_method = eval_use_grid_method_;
 
-            if (eval_use_grid_method_) {
-                double est_area = (req.polygon.getExteriorRing().size() > 0)
-                    ? req.polygon.area() : 0.0;
-                int est_points = static_cast<int>(est_area /
-                    (eval_grid_resolution_ * eval_grid_resolution_));
-                RCLCPP_INFO(this->get_logger(),
-                    "Core eval: area=%.1f m², resolution=%.2f m, "
-                    "est_grid_points=%d, path_points=%zu",
-                    est_area, eval_grid_resolution_, est_points,
-                    result.path_points.size());
-            }
+            for (std::size_t component_index = 0;
+                 component_index < result.component_plans.size();
+                 ++component_index) {
+                const auto& component =
+                    result.component_plans[component_index];
+                std::vector<f2c::types::LinearRing> eval_hole_rings;
+                for (std::size_t cell_index = 0;
+                     cell_index < component.coverage_target.size();
+                     ++cell_index) {
+                    const auto& target_cell =
+                        component.coverage_target.getGeometry(cell_index);
+                    for (std::size_t hole = 0;
+                         hole + 1 < target_cell.size(); ++hole) {
+                        eval_hole_rings.push_back(
+                            target_cell.getInteriorRing(hole));
+                    }
+                }
 
-            EvalResult eval_result = evaluatePlan(
-                result.path, eval_swaths, full_polygon_cells, eval_hole_rings,
-                result.planning_time_ms, eval_params);
+                f2c::types::Swaths eval_swaths;
+                for (size_t route_index = 0;
+                     route_index < component.route.sizeVectorSwaths();
+                     ++route_index) {
+                    const auto& route_swaths =
+                        component.route.getSwaths(route_index);
+                    for (size_t swath = 0;
+                         swath < route_swaths.size(); ++swath) {
+                        eval_swaths.push_back(route_swaths.at(swath));
+                    }
+                }
 
-            std::string scenario_label = "polygon_" + std::to_string(polygon_id);
-            std::string report = formatEvalReport(eval_result, scenario_label.c_str());
-            RCLCPP_INFO(this->get_logger(), "Core %s", report.c_str());
+                if (eval_use_grid_method_) {
+                    const double estimated_area =
+                        component.coverage_target.area();
+                    const int estimated_points = static_cast<int>(
+                        estimated_area /
+                        (eval_grid_resolution_ * eval_grid_resolution_));
+                    RCLCPP_INFO(this->get_logger(),
+                        "Core eval component=%zu: area=%.1f m², "
+                        "resolution=%.2f m, est_grid_points=%d, "
+                        "path_points=%zu",
+                        component_index + 1, estimated_area,
+                        eval_grid_resolution_, estimated_points,
+                        component.path_points.size());
+                }
 
-            // 写网格 JSON
-            if (eval_use_grid_method_ && eval_result.grid_resolution > 0.0) {
-                std::string grid_path = output_dir_ + "/f2c_grid_core_"
-                    + scenario_label + ".json";
-                writeGridJson(eval_result, grid_path);
+                EvalResult eval_result = evaluatePlan(
+                    component.path, eval_swaths,
+                    component.coverage_target, eval_hole_rings,
+                    component.planning_time_ms, eval_params);
+
+                std::string scenario_label =
+                    "polygon_" + std::to_string(polygon_id);
+                if (result.component_plans.size() > 1) {
+                    scenario_label += "_component_" +
+                        std::to_string(component_index + 1);
+                }
+                std::string report = formatEvalReport(
+                    eval_result, scenario_label.c_str());
+                RCLCPP_INFO(
+                    this->get_logger(), "Core %s", report.c_str());
+
+                if (eval_use_grid_method_ &&
+                    eval_result.grid_resolution > 0.0) {
+                    std::string grid_path = output_dir_ +
+                        "/f2c_grid_" + scenario_label + ".json";
+                    writeGridJson(eval_result, grid_path);
+                }
             }
         }
 #endif
@@ -2004,7 +2218,16 @@ private:
             planning_end - planning_start).count();
         RCLCPP_INFO(this->get_logger(),
             "PlannerCore done: %zu path waypoints, %.1f ms total (plan=%.1f ms)",
-            path_waypoints.size(), total_ms, result.planning_time_ms);
+            published_waypoint_count, total_ms, result.planning_time_ms);
+        } catch (const std::exception& exception) {
+            RCLCPP_ERROR(this->get_logger(),
+                "PlannerCore adapter failed: %s", exception.what());
+            clearPlanningCacheForPolygon(index, true);
+        } catch (...) {
+            RCLCPP_ERROR(this->get_logger(),
+                "PlannerCore adapter failed with a non-C++ exception");
+            clearPlanningCacheForPolygon(index, true);
+        }
     }
 
     // ========== 主规划函数 ==========

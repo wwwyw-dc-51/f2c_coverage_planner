@@ -68,6 +68,8 @@ TEST(PlannerConfig, RejectsInvalidRuntimeOnlyParameters)
     config.runtime.no_hl_width_ratio =
         std::numeric_limits<double>::infinity();
     config.runtime.min_hole_area = -0.1;
+    config.runtime.cspace_clearance_margin = -0.1;
+    config.runtime.max_excluded_area_ratio = 1.1;
     config.runtime.eval_grid_resolution = 0.0;
     config.runtime.eval_coverage_threshold = 1.1;
 
@@ -77,6 +79,10 @@ TEST(PlannerConfig, RejectsInvalidRuntimeOnlyParameters)
     EXPECT_TRUE(hasIssueFor(issues, "runtime.mid_hl_width_ratio"));
     EXPECT_TRUE(hasIssueFor(issues, "runtime.no_hl_width_ratio"));
     EXPECT_TRUE(hasIssueFor(issues, "runtime.min_hole_area"));
+    EXPECT_TRUE(hasIssueFor(
+        issues, "runtime.cspace_clearance_margin"));
+    EXPECT_TRUE(hasIssueFor(
+        issues, "runtime.max_excluded_area_ratio"));
     EXPECT_TRUE(hasIssueFor(issues, "runtime.eval_grid_resolution"));
     EXPECT_TRUE(hasIssueFor(issues, "runtime.eval_coverage_threshold"));
 }

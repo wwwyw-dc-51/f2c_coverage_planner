@@ -137,7 +137,10 @@ ros2 run yingshi_robot polygon_planner_node --ros-args \
   -p coverage_width:=0.90 \
   -p mid_hl_width_ratio:=0.20 \
   -p no_hl_width_ratio:=0.0 \
-  -p min_hole_area:=1.0 \
+  -p min_hole_area:=0.0 \
+  -p traversability_enabled:=true \
+  -p cspace_clearance_margin:=0.0 \
+  -p max_excluded_area_ratio:=0.05 \
   -p decomposition_angle:=0.0 \
   -p swath_endpoint_shrink_distance:=0.03 \
   -p min_swath_length:=0.5 \
@@ -234,6 +237,11 @@ def on_plan(msg):
     if len(msg.poses) > 0:
         plan_received = True
 plan_sub = node.create_subscription(Path, "/planned2_path_1", on_plan, 10)
+component_plan_subs = [
+    node.create_subscription(
+        Path, f"/planned2_path_1_component_{index}", on_plan, 10)
+    for index in range(1, 65)
+]
 
 polygon_msg = make_polygon(polygon)
 holes_msg = make_holes(holes)

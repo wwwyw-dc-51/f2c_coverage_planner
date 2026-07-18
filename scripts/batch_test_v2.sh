@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F2C 7场景批量测试 v2 — 每场景独立隔离，避免 topic 串扰
+# F2C 8场景批量测试 v2 — 每场景独立隔离，避免 topic 串扰
 set -euo pipefail
 
 WS="$HOME/f2c_coverage_planner"
@@ -32,7 +32,10 @@ PLANNER_PARAMS=(
     -p coverage_width:=0.90
     -p mid_hl_width_ratio:=0.20
     -p no_hl_width_ratio:=0.0
-    -p min_hole_area:=1.0
+    -p min_hole_area:=0.0
+    -p traversability_enabled:=true
+    -p cspace_clearance_margin:=0.0
+    -p max_excluded_area_ratio:=0.05
     -p decomposition_angle:=0.0
     -p swath_endpoint_shrink_distance:=0.03
     -p min_swath_length:=0.5
@@ -66,7 +69,7 @@ cleanup_ros() {
 }
 
 echo "========================================="
-echo "  F2C 7场景批量测试 v2"
+echo "  F2C 8场景批量测试 v2"
 echo "  输出: $RESULT_DIR"
 echo "========================================="
 
@@ -87,6 +90,7 @@ for NAME in S1 S2 S3 S4 S5 S6 S7 notched; do
 
     # 每场景从干净产物开始，避免复用上一场景或同目录旧批次的数据。
     rm -f "$VIS_JSON" "$GRID_JSON" "$DATA_FILE" \
+        "${GRID_JSON%.json}"_component_*.json \
         "$RESULT_DIR/${NAME}_grid.json" \
         "$RESULT_DIR/${NAME}_coverage.png" \
         "$RESULT_DIR/${NAME}_cells.png" \
@@ -128,6 +132,7 @@ node = rclpy.create_node(f'test_{name}')
 
 # 数据容器
 path_data = []
+component_path_data = {}
 plan_received = False
 
 def on_path(msg):
@@ -137,6 +142,25 @@ def on_path(msg):
         plan_received = True
 
 node.create_subscription(Path, '/planned2_path_1', on_path, 10)
+
+def make_component_callback(component_index):
+    def on_component_path(msg):
+        global plan_received
+        if len(msg.poses) > 0 and component_index not in component_path_data:
+            component_path_data[component_index] = [
+                {'x': p.pose.position.x, 'y': p.pose.position.y}
+                for p in msg.poses
+            ]
+            plan_received = True
+    return on_component_path
+
+component_subscriptions = []
+for component_index in range(1, 65):
+    component_subscriptions.append(node.create_subscription(
+        Path,
+        f'/planned2_path_1_component_{component_index}',
+        make_component_callback(component_index),
+        10))
 poly_pub = node.create_publisher(Polygon, '/input_polygon_1', 10)
 holes_pub = node.create_publisher(Polygon, '/input_polygon_1_holes', 10)
 
@@ -181,13 +205,25 @@ for i in range(120):
     if os.path.exists(log_file):
         with open(log_file) as f:
             content = f.read()
-            if '综合得分' in content:
+            component_matches = re.findall(
+                r'CSPACE_REPORT polygon=1 valid=true .*?components=(\d+)',
+                content)
+            expected_evaluations = (
+                int(component_matches[-1]) if component_matches else 1)
+            completed_evaluations = len(re.findall(r'综合得分[:\s]*[\d.]+', content))
+            if completed_evaluations >= expected_evaluations:
                 print(f'  Eval complete after {i+1}s')
                 eval_found = True
                 break
 
 # 解析结果
 result = {}
+cov = 0.0
+score = 0.0
+text = ''
+if os.path.exists(log_file):
+    with open(log_file) as f:
+        text = f.read()
 if eval_found:
     def extract(pat, text, cast=float, flags=0):
         # 多 cell 场景会输出多组评估，取最后一组（最终汇总）
@@ -196,9 +232,6 @@ if eval_found:
             val = matches[-1]
             return cast(val) if cast != int else int(val)
         return None
-
-    with open(log_file) as f:
-        text = f.read()
 
     result = {
         'scenario': name,
@@ -218,15 +251,77 @@ if eval_found:
     cov = result.get('coverage_rate', 0) or 0
     score = result.get('single_score', 0) or 0
 
+cspace = {}
+cspace_match = re.findall(
+    r'CSPACE_REPORT polygon=1 valid=true '
+    r'original_area=([\d.eE+-]+) reachable_area=([\d.eE+-]+) '
+    r'excluded_area=([\d.eE+-]+) excluded_ratio=([\d.eE+-]+) '
+    r'max_ratio=([\d.eE+-]+) components=(\d+) '
+    r'requires_repositioning=(true|false) gate=(PASS|FAIL)',
+    text)
+if cspace_match:
+    values = cspace_match[-1]
+    cspace = {
+        'valid': True,
+        'original_area': float(values[0]),
+        'reachable_area': float(values[1]),
+        'excluded_area': float(values[2]),
+        'excluded_ratio': float(values[3]),
+        'max_ratio': float(values[4]),
+        'component_count': int(values[5]),
+        'requires_repositioning': values[6] == 'true',
+        'gate': values[7],
+    }
+elif 'CSPACE_REPORT polygon=1 valid=false' in text:
+    cspace = {'valid': False}
+
+component_evals = []
+component_count = cspace.get('component_count', 1)
+if eval_found and component_count > 1:
+    component_patterns = {
+        'coverage_rate': r'覆盖率[:\s]*([\d.]+)%',
+        'single_score': r'综合得分[:\s]*([\d.]+)',
+        'uncovered_area': r'未覆盖面积[:\s]*([\d.]+)',
+        'total_distance': r'路径总长[:\s]*([\d.]+)',
+        'work_ratio': r'有效工作比[:\s]*([\d.]+)%',
+        'turn_count': r'^转弯次数:\s*(\d+)\s*$',
+        'overlap_rate': r'重叠率[:\s]*([\d.]+)%',
+        'planning_time_ms': r'规划耗时[:\s]*([\d.]+)\s*ms',
+        'net_area': r'目标净面积[:\s]*(-?[\d.]+)',
+    }
+    component_values = {}
+    for metric_name, pattern in component_patterns.items():
+        flags = re.MULTILINE if metric_name == 'turn_count' else 0
+        component_values[metric_name] = re.findall(pattern, text, flags)[-component_count:]
+    if all(len(values) == component_count
+           for values in component_values.values()):
+        for component_index in range(component_count):
+            component_eval = {}
+            for metric_name, values in component_values.items():
+                component_eval[metric_name] = (
+                    int(values[component_index])
+                    if metric_name == 'turn_count'
+                    else float(values[component_index]))
+            component_evals.append(component_eval)
+        result = {}
+
 # 从 planner 原生 JSON 读取完整路径（ROS topic 的简化路径点数太少，图对不上）
 full_path = path_data
+component_paths = [
+    component_path_data[index]
+    for index in sorted(component_path_data)
+]
 if os.path.exists(vis_json):
     try:
         with open(vis_json) as vf:
             vd = json.load(vf)
         native_pts = []
-        if 'path' in vd:
+        if vd.get('path'):
             native_pts = vd['path']
+        elif vd.get('component_paths'):
+            native_components = vd['component_paths']
+            if sum(map(len, native_components)) > sum(map(len, component_paths)):
+                component_paths = native_components
         elif 'cells' in vd:
             # 多 cell 场景：拼接所有 cell 的路径
             for cell in vd.get('cells', []):
@@ -257,15 +352,23 @@ if os.path.exists(vis_json):
 merged = {
     'scenario': name,
     'path': full_path,
+    'component_paths': component_paths,
     'swaths': vis_swaths,
     'eval': result,
+    'component_evals': component_evals,
+    'cspace': cspace,
     'cells': vis_cells,
     'connections': vis_connections,
     'batch_status': {
         'plan_received': plan_received,
         'evaluation_completed': eval_found,
         'visualization_artifact_created': os.path.exists(vis_json),
-        'grid_artifact_created': os.path.exists(grid_json),
+        'grid_artifact_created': (
+            os.path.exists(grid_json)
+            if component_count == 1
+            else all(os.path.exists(grid_json.replace(
+                '.json', f'_component_{index}.json'))
+                for index in range(1, component_count + 1))),
     },
 }
 data_file = f'{result_dir}/{name}_data.json'
@@ -284,6 +387,13 @@ PYTEST
     if [ -f "$GRID_JSON" ]; then
         cp "$GRID_JSON" "$RESULT_DIR/${NAME}_grid.json"
     fi
+    for COMPONENT_GRID in "${GRID_JSON%.json}"_component_*.json; do
+        if [ -f "$COMPONENT_GRID" ]; then
+            COMPONENT_SUFFIX="${COMPONENT_GRID##*_component_}"
+            cp "$COMPONENT_GRID" \
+                "$RESULT_DIR/${NAME}_grid_component_${COMPONENT_SUFFIX}"
+        fi
+    done
     kill $PLANNER_PID 2>/dev/null || true
     wait $PLANNER_PID 2>/dev/null || true
 
@@ -333,7 +443,7 @@ rd = sys.argv[1]
 lines = []
 lines.append("")
 lines.append("="*70)
-lines.append("  F2C 7场景覆盖规划 — 批量测试报告")
+lines.append("  F2C 8场景覆盖规划 — 批量测试报告")
 lines.append("="*70)
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 lines.append(f"生成时间: {now}")
@@ -344,7 +454,19 @@ for n in ['S1','S2','S3','S4','S5','S6','S7','notched']:
     df = f'{rd}/{n}_data.json'
     if os.path.exists(df):
         with open(df) as f:
-            e = json.load(f).get('eval', {})
+            data = json.load(f)
+            e = data.get('eval', {})
+            component_evals = data.get('component_evals', [])
+            if component_evals:
+                e = {
+                    'net_area': sum(v.get('net_area', 0) or 0 for v in component_evals),
+                    'coverage_rate': min(v.get('coverage_rate', 0) or 0 for v in component_evals),
+                    'single_score': min(v.get('single_score', 0) or 0 for v in component_evals),
+                    'uncovered_area': sum(v.get('uncovered_area', 0) or 0 for v in component_evals),
+                    'total_distance': sum(v.get('total_distance', 0) or 0 for v in component_evals),
+                    'overlap_rate': max(v.get('overlap_rate', 0) or 0 for v in component_evals),
+                    'planning_time_ms': sum(v.get('planning_time_ms', 0) or 0 for v in component_evals),
+                }
         a = e.get('net_area',0) or 0
         c = e.get('coverage_rate',0) or 0
         s = e.get('single_score',0) or 0

@@ -24,11 +24,18 @@ class TestCapture(Node):
         self.yaml_path = yaml_path
 
         self.path_pts = []
+        self.component_paths = {}
         self.swaths_data = []
         self.path_received = False
         self.eval_text = ''
 
         self.path_sub = self.create_subscription(Path, '/planned2_path_1', self.on_path, 10)
+        self.component_subscriptions = [
+            self.create_subscription(
+                Path, f'/planned2_path_1_component_{index}',
+                self.make_component_callback(index), 10)
+            for index in range(1, 65)
+        ]
         self.poly_pub = self.create_publisher(Polygon, '/input_polygon_1', 10)
         self.holes_pub = self.create_publisher(Polygon, '/input_polygon_1_holes', 10)
 
@@ -40,6 +47,17 @@ class TestCapture(Node):
                     'y': pose.pose.position.y
                 })
             self.path_received = True
+
+    def make_component_callback(self, component_index):
+        def on_component_path(msg):
+            if len(msg.poses) > 0 and component_index not in self.component_paths:
+                self.component_paths[component_index] = [
+                    {'x': pose.pose.position.x,
+                     'y': pose.pose.position.y}
+                    for pose in msg.poses
+                ]
+                self.path_received = True
+        return on_component_path
 
     def publish_polygon(self):
         with open(self.yaml_path) as f:
@@ -96,7 +114,10 @@ class TestCapture(Node):
             '-p', 'coverage_width:=0.90',
             '-p', 'mid_hl_width_ratio:=0.20',
             '-p', 'no_hl_width_ratio:=0.0',
-            '-p', 'min_hole_area:=1.0',
+            '-p', 'min_hole_area:=0.0',
+            '-p', 'traversability_enabled:=true',
+            '-p', 'cspace_clearance_margin:=0.0',
+            '-p', 'max_excluded_area_ratio:=0.05',
             '-p', 'decomposition_angle:=0.0',
             '-p', 'swath_endpoint_shrink_distance:=0.03',
             '-p', 'min_swath_length:=0.5',
@@ -132,8 +153,15 @@ class TestCapture(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
             if os.path.exists(log_file):
                 with open(log_file) as f:
-                    if '综合得分' in f.read():
-                        self.eval_text = open(log_file).read()
+                    content = f.read()
+                    component_matches = re.findall(
+                        r'CSPACE_REPORT polygon=1 valid=true '
+                        r'.*?components=(\d+)', content)
+                    expected = int(component_matches[-1]) if component_matches else 1
+                    completed = len(re.findall(
+                        r'综合得分[:\s]*[\d.]+', content))
+                    if completed >= expected:
+                        self.eval_text = content
                         print(f'  Evaluation complete after {i+1}s')
                         break
 
@@ -164,9 +192,9 @@ class TestCapture(Node):
         }
 
         for key, pat in patterns.items():
-            m = re.search(pat, self.eval_text)
-            if m:
-                val = m.group(1)
+            matches = re.findall(pat, self.eval_text, re.MULTILINE)
+            if matches:
+                val = matches[-1]
                 if key in ('turn_count',):
                     result[key] = int(val)
                 elif key == 'coverage_method':
@@ -177,6 +205,39 @@ class TestCapture(Node):
                     result[key] = float(val)
 
         return result
+
+    def parse_component_evals(self):
+        component_matches = re.findall(
+            r'CSPACE_REPORT polygon=1 valid=true .*?components=(\d+)',
+            self.eval_text)
+        component_count = int(component_matches[-1]) if component_matches else 1
+        if component_count <= 1:
+            return []
+        patterns = {
+            'coverage_rate': r'覆盖率[:\s]*([\d.]+)%',
+            'single_score': r'综合得分[:\s]*([\d.]+)',
+            'uncovered_area': r'未覆盖面积[:\s]*([\d.]+)',
+            'total_distance': r'路径总长[:\s]*([\d.]+)',
+            'work_ratio': r'有效工作比[:\s]*([\d.]+)%',
+            'turn_count': r'^转弯次数:\s*(\d+)\s*$',
+            'overlap_rate': r'重叠率[:\s]*([\d.]+)%',
+            'planning_time_ms': r'规划耗时[:\s]*([\d.]+)\s*ms',
+            'net_area': r'目标净面积[:\s]*([\d.]+)',
+        }
+        values = {
+            key: re.findall(pattern, self.eval_text, re.MULTILINE)[-component_count:]
+            for key, pattern in patterns.items()
+        }
+        if not all(len(items) == component_count for items in values.values()):
+            return []
+        evaluations = []
+        for index in range(component_count):
+            evaluations.append({
+                key: int(items[index]) if key == 'turn_count'
+                else float(items[index])
+                for key, items in values.items()
+            })
+        return evaluations
 
     def extract_swaths_from_log(self, log_file):
         swaths = []
@@ -211,6 +272,7 @@ def main():
         log_file = capture.run_test()
 
         eval_result = capture.parse_eval()
+        component_evals = capture.parse_component_evals()
 
         if not capture.swaths_data:
             capture.swaths_data = capture.extract_swaths_from_log(log_file)
@@ -218,8 +280,13 @@ def main():
         output = {
             'scenario': scenario,
             'path': capture.path_pts,
+            'component_paths': [
+                capture.component_paths[index]
+                for index in sorted(capture.component_paths)
+            ],
             'swaths': capture.swaths_data,
             'eval': eval_result,
+            'component_evals': component_evals,
             'log_file': log_file
         }
 

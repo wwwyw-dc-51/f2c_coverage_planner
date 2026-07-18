@@ -50,6 +50,70 @@ Visualization Manager:
       Line Style: Lines
       Line Width: 0.03
       Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 1
+      Topic: {Value: /planned2_path_1_component_1}
+      Color: 0; 220; 80
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 2
+      Topic: {Value: /planned2_path_1_component_2}
+      Color: 40; 180; 255
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 3
+      Topic: {Value: /planned2_path_1_component_3}
+      Color: 255; 120; 40
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 4
+      Topic: {Value: /planned2_path_1_component_4}
+      Color: 180; 80; 255
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 5
+      Topic: {Value: /planned2_path_1_component_5}
+      Color: 255; 210; 40
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 6
+      Topic: {Value: /planned2_path_1_component_6}
+      Color: 40; 220; 200
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 7
+      Topic: {Value: /planned2_path_1_component_7}
+      Color: 255; 80; 130
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: C-space Component 8
+      Topic: {Value: /planned2_path_1_component_8}
+      Color: 130; 200; 80
+      Line Style: Lines
+      Line Width: 0.03
+      Value: true
     - Class: rviz_default_plugins/PoseArray
       Enabled: true
       Name: Swath Navigation Points

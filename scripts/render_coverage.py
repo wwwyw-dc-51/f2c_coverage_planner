@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """F2C 覆盖规划可视化渲染脚本"""
-import sys, yaml, json, math, os
+import sys, yaml, json, math, os, glob
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -8,7 +8,8 @@ from matplotlib.patches import Polygon as MPolygon
 from matplotlib.path import Path as MPath
 import numpy as np
 
-def render(scenario_name, outer, holes, path_pts, eval_result, output_png, grid_json=None):
+def render(scenario_name, outer, holes, path_pts, eval_result, output_png,
+           grid_json=None, component_paths=None):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
     # --- 左图: 路径规划图 ---
@@ -19,9 +20,10 @@ def render(scenario_name, outer, holes, path_pts, eval_result, output_png, grid_
         hp = MPolygon(h, fill=True, facecolor='gray', edgecolor='darkred', linewidth=1.5, alpha=0.7)
         ax1.add_patch(hp)
 
-    if path_pts:
-        px = [p['x'] for p in path_pts]
-        py = [p['y'] for p in path_pts]
+    path_groups = component_paths or ([path_pts] if path_pts else [])
+    for path_group in path_groups:
+        px = [p['x'] for p in path_group]
+        py = [p['y'] for p in path_group]
         ax1.plot(px, py, color='darkorange', linewidth=0.8, alpha=0.9)
 
     ax1.set_aspect('equal')
@@ -39,18 +41,26 @@ def render(scenario_name, outer, holes, path_pts, eval_result, output_png, grid_
     covered_x, covered_y = [], []
     uncovered_x, uncovered_y = [], []
 
-    if grid_json and os.path.exists(grid_json):
-        with open(grid_json) as f:
-            gd = json.load(f)
-        covered_x = [p[0] for p in gd.get('covered', [])]
-        covered_y = [p[1] for p in gd.get('covered', [])]
-        uncovered_x = [p[0] for p in gd.get('uncovered', [])]
-        uncovered_y = [p[1] for p in gd.get('uncovered', [])]
+    grid_files = grid_json if isinstance(grid_json, list) else [grid_json]
+    grid_files = [path for path in grid_files if path and os.path.exists(path)]
+    if grid_files:
+        covered_points = set()
+        uncovered_points = set()
+        for grid_file in grid_files:
+            with open(grid_file) as f:
+                gd = json.load(f)
+            covered_points.update(map(tuple, gd.get('covered', [])))
+            uncovered_points.update(map(tuple, gd.get('uncovered', [])))
+        uncovered_points.difference_update(covered_points)
+        covered_x = [p[0] for p in covered_points]
+        covered_y = [p[1] for p in covered_points]
+        uncovered_x = [p[0] for p in uncovered_points]
+        uncovered_y = [p[1] for p in uncovered_points]
         print(f'  [render] Using C++ grid data: {len(covered_x)} covered + {len(uncovered_x)} uncovered')
     else:
         # 回退：Python 自行网格采样
         res = 0.10
-        cov_width = 0.45
+        cov_width = 0.90
         half_w = cov_width / 2.0
 
         ox, oy = zip(*outer)
@@ -68,10 +78,14 @@ def render(scenario_name, outer, holes, path_pts, eval_result, output_png, grid_
                     return False
             return True
 
-        if path_pts:
-            segs = np.array([(path_pts[i]['x'], path_pts[i]['y'],
-                              path_pts[i+1]['x'], path_pts[i+1]['y'])
-                             for i in range(len(path_pts)-1)])
+        segment_rows = [
+            (group[i]['x'], group[i]['y'],
+             group[i + 1]['x'], group[i + 1]['y'])
+            for group in path_groups
+            for i in range(len(group) - 1)
+        ]
+        if segment_rows:
+            segs = np.array(segment_rows)
         else:
             segs = np.zeros((0, 4))
 
@@ -254,11 +268,26 @@ if __name__ == '__main__':
     with open(sys.argv[3]) as f:
         jd = json.load(f)
     path_pts = jd.get('path', [])
+    component_paths = jd.get('component_paths', [])
     eval_r = jd.get('eval', {})
+    if not eval_r and jd.get('component_evals'):
+        component_evals = jd['component_evals']
+        eval_r = {
+            'coverage_rate': min(
+                e.get('coverage_rate', 0) or 0 for e in component_evals),
+            'single_score': min(
+                e.get('single_score', 0) or 0 for e in component_evals),
+        }
     cells_data = jd.get('cells', [])
     connections_data = jd.get('connections', [])
 
     grid_json = sys.argv[5] if len(sys.argv) > 5 and not sys.argv[5].startswith('--') else None
+    if not grid_json and component_paths:
+        component_grid_pattern = sys.argv[3].replace(
+            '_data.json', '_grid_component_*.json')
+        component_grids = sorted(glob.glob(component_grid_pattern))
+        if component_grids:
+            grid_json = component_grids
     mode = 'coverage'  # default
     for a in sys.argv:
         if a.startswith('--mode='):
@@ -271,4 +300,5 @@ if __name__ == '__main__':
     elif mode == 'connections':
         render_connections(name, outer, holes, cells_data, connections_data, sys.argv[4])
     else:
-        render(name, outer, holes, path_pts, eval_r, sys.argv[4], grid_json)
+        render(name, outer, holes, path_pts, eval_r, sys.argv[4],
+               grid_json, component_paths)

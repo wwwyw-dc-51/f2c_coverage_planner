@@ -209,6 +209,13 @@ std::vector<PlannerConfigIssue> validatePlannerConfig(
         issues, "runtime.min_hole_area",
         config.runtime.min_hole_area, 0.0,
         std::numeric_limits<double>::max());
+    requireRange(
+        issues, "runtime.cspace_clearance_margin",
+        config.runtime.cspace_clearance_margin, 0.0,
+        std::numeric_limits<double>::max());
+    requireRange(
+        issues, "runtime.max_excluded_area_ratio",
+        config.runtime.max_excluded_area_ratio, 0.0, 1.0);
     requirePositive(
         issues, "runtime.eval_grid_resolution",
         config.runtime.eval_grid_resolution);
