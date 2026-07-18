@@ -71,6 +71,8 @@ echo "========================================="
 
 ERRORS=0
 COVERAGE_THRESHOLD=0.99  # 产品验收门槛 99%
+VIS_JSON="/tmp/f2c_vis_polygon_1.json"
+GRID_JSON="/tmp/f2c_grid_polygon_1.json"
 
 for NAME in S1 S2 S3 S4 S5 S6 notched; do
     YAML="${SCENARIOS[$NAME]}"
@@ -80,6 +82,14 @@ for NAME in S1 S2 S3 S4 S5 S6 notched; do
     cleanup_ros
 
     LOG_FILE="$RESULT_DIR/${NAME}_planner.log"
+    DATA_FILE="$RESULT_DIR/${NAME}_data.json"
+
+    # 每场景从干净产物开始，避免复用上一场景或同目录旧批次的数据。
+    rm -f "$VIS_JSON" "$GRID_JSON" "$DATA_FILE" \
+        "$RESULT_DIR/${NAME}_grid.json" \
+        "$RESULT_DIR/${NAME}_coverage.png" \
+        "$RESULT_DIR/${NAME}_cells.png" \
+        "$RESULT_DIR/${NAME}_connections.png"
 
     # 启动 planner
     ros2 run yingshi_robot polygon_planner_node --ros-args "${PLANNER_PARAMS[@]}" > "$LOG_FILE" 2>&1 &
@@ -96,7 +106,8 @@ for NAME in S1 S2 S3 S4 S5 S6 notched; do
     fi
 
     # 一步完成: 发布 + 订阅路径 + 等待评估
-    python3 - "$NAME" "$YAML" "$LOG_FILE" "$RESULT_DIR" << 'PYTEST'
+    set +e
+    python3 - "$NAME" "$YAML" "$LOG_FILE" "$RESULT_DIR" "$VIS_JSON" "$GRID_JSON" << 'PYTEST'
 import sys, time, yaml, json, os, re
 import rclpy
 from rclpy.node import Node
@@ -108,6 +119,8 @@ name = sys.argv[1]
 yaml_path = sys.argv[2]
 log_file = sys.argv[3]
 result_dir = sys.argv[4]
+vis_json = sys.argv[5]
+grid_json = sys.argv[6]
 
 rclpy.init()
 node = rclpy.create_node(f'test_{name}')
@@ -206,7 +219,6 @@ if eval_found:
 
 # 从 planner 原生 JSON 读取完整路径（ROS topic 的简化路径点数太少，图对不上）
 full_path = path_data
-vis_json = '/tmp/f2c_vis_polygon_1.json'
 if os.path.exists(vis_json):
     try:
         with open(vis_json) as vf:
@@ -241,8 +253,20 @@ if os.path.exists(vis_json):
         print(f'  WARNING: cells JSON read failed: {e}')
 
 # 保存数据
-merged = {'scenario': name, 'path': full_path, 'swaths': vis_swaths, 'eval': result,
-          'cells': vis_cells, 'connections': vis_connections}
+merged = {
+    'scenario': name,
+    'path': full_path,
+    'swaths': vis_swaths,
+    'eval': result,
+    'cells': vis_cells,
+    'connections': vis_connections,
+    'batch_status': {
+        'plan_received': plan_received,
+        'evaluation_completed': eval_found,
+        'visualization_artifact_created': os.path.exists(vis_json),
+        'grid_artifact_created': os.path.exists(grid_json),
+    },
+}
 data_file = f'{result_dir}/{name}_data.json'
 with open(data_file, 'w') as f:
     json.dump(merged, f, indent=2, ensure_ascii=False)
@@ -250,22 +274,25 @@ with open(data_file, 'w') as f:
 node.destroy_node()
 rclpy.shutdown()
 PYTEST
+    CAPTURE_STATUS=$?
+    set -e
 
     # 等待 planner 自然结束(评估完成后planner继续spin)
     sleep 2
     # 保存每场景独立的 grid JSON（避免后续渲染用错数据）
-    GRID_SRC="/tmp/f2c_grid_polygon_1.json"
-    if [ -f "$GRID_SRC" ]; then
-        cp "$GRID_SRC" "$RESULT_DIR/${NAME}_grid.json"
+    if [ -f "$GRID_JSON" ]; then
+        cp "$GRID_JSON" "$RESULT_DIR/${NAME}_grid.json"
     fi
     kill $PLANNER_PID 2>/dev/null || true
     wait $PLANNER_PID 2>/dev/null || true
 
     echo "  $NAME done."
 
-    # 检查数据文件是否生成（崩溃/超时会缺文件）
-    if [ ! -f "$RESULT_DIR/${NAME}_data.json" ]; then
-        echo "  ERROR: $NAME data file missing — test failed"
+    if [ "$CAPTURE_STATUS" -ne 0 ]; then
+        echo "  ERROR: $NAME capture process failed (exit=$CAPTURE_STATUS)"
+        ERRORS=$((ERRORS + 1))
+    elif ! python3 "$WS/scripts/batch_result_gate.py" "$DATA_FILE" \
+            --coverage-threshold "$COVERAGE_THRESHOLD"; then
         ERRORS=$((ERRORS + 1))
     fi
 done
