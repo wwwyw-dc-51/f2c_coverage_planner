@@ -171,6 +171,11 @@ def render_cells(scenario_name, outer, holes, cells_data, output_png):
             ax.plot(cell['exit']['x'], cell['exit']['y'], 's', color='#e83015',
                     markersize=14, markeredgewidth=2, markeredgecolor='white', zorder=10)
 
+    # 按多边形包围盒裁剪视图，避免大空白
+    ox = [p[0] for p in outer]; oy = [p[1] for p in outer]
+    margin = max(max(ox) - min(ox), max(oy) - min(oy)) * 0.05
+    ax.set_xlim(min(ox) - margin, max(ox) + margin)
+    ax.set_ylim(min(oy) - margin, max(oy) + margin)
     ax.set_aspect('equal')
     ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
     ax.text(0.02, 0.98, f'Cells: {len(cells_data)} | ● entry  ■ exit',
@@ -243,6 +248,11 @@ def render_connections(scenario_name, outer, holes, cells_data, connections_data
                     fontsize=7, ha='center', va='bottom', color='#c8404a',
                     bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.7))
 
+    # 按多边形包围盒裁剪视图，避免大空白
+    ox = [p[0] for p in outer]; oy = [p[1] for p in outer]
+    margin = max(max(ox) - min(ox), max(oy) - min(oy)) * 0.05
+    ax.set_xlim(min(ox) - margin, max(ox) + margin)
+    ax.set_ylim(min(oy) - margin, max(oy) + margin)
     ax.set_aspect('equal')
     ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
     ax.text(0.02, 0.98, f'Cells: {len(cells_data)} | Route links: {len(connections_data)} | ○ entry  ■ exit',
