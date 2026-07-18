@@ -87,10 +87,21 @@ TEST(PlannerConfig, RejectsInvalidRuntimeOnlyParameters)
     EXPECT_TRUE(hasIssueFor(issues, "runtime.eval_coverage_threshold"));
 }
 
-TEST(PlannerConfig, RejectsConflictingCopiesOfSharedPhysicalParameters)
+TEST(PlannerConfig, AllowsIdenticalSharedParameterCopies)
 {
     yingshi::PlannerConfig config;
     config.fill.coverage_width = 0.90;
+    config.path.coverage_width = 0.90;
+
+    const auto issues = yingshi::validatePlannerConfig(config);
+
+    EXPECT_FALSE(hasIssueFor(issues, "coverage_width"));
+}
+
+TEST(PlannerConfig, RejectsConflictingSharedParameterValues)
+{
+    yingshi::PlannerConfig config;
+    config.fill.coverage_width = 0.75;
     config.path.coverage_width = 0.90;
 
     const auto issues = yingshi::validatePlannerConfig(config);
