@@ -79,6 +79,35 @@ class BatchResultGateTest(unittest.TestCase):
 
                 self.assertTrue(any(metric_name in error for error in errors))
 
+    def test_rejects_metrics_outside_their_semantic_ranges(self):
+        invalid_metrics = {
+            "coverage_rate": 100.01,
+            "single_score": -0.01,
+            "uncovered_area": -0.01,
+            "total_distance": -0.01,
+            "work_ratio": -0.01,
+            "turn_count": -1,
+            "overlap_rate": -0.01,
+            "planning_time_ms": -0.01,
+            "net_area": 0.0,
+        }
+        for metric_name, invalid_value in invalid_metrics.items():
+            with self.subTest(metric_name=metric_name):
+                report = valid_report()
+                report["eval"][metric_name] = invalid_value
+
+                errors = validate_report(report)
+
+                self.assertTrue(any(metric_name in error for error in errors))
+
+    def test_rejects_fractional_turn_count(self):
+        report = valid_report()
+        report["eval"]["turn_count"] = 1.5
+
+        errors = validate_report(report)
+
+        self.assertTrue(any("turn_count" in error for error in errors))
+
     def test_cli_returns_nonzero_and_explains_rejected_report(self):
         report = valid_report()
         report["batch_status"]["evaluation_completed"] = False

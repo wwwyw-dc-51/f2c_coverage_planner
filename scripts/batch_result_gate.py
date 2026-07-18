@@ -25,6 +25,17 @@ REQUIRED_EVAL_METRICS = (
     "planning_time_ms",
     "net_area",
 )
+BOUNDED_EVAL_METRICS = {
+    "coverage_rate": (0.0, 100.0),
+    "single_score": (0.0, 100.0),
+}
+NON_NEGATIVE_EVAL_METRICS = (
+    "uncovered_area",
+    "total_distance",
+    "work_ratio",
+    "overlap_rate",
+    "planning_time_ms",
+)
 
 
 def _is_finite_number(value):
@@ -65,6 +76,24 @@ def validate_report(report, coverage_threshold=0.99):
     for metric_name in REQUIRED_EVAL_METRICS:
         if not _is_finite_number(evaluation.get(metric_name)):
             errors.append(f"eval.{metric_name} 缺失或不是有限数值")
+
+    for metric_name, (minimum, maximum) in BOUNDED_EVAL_METRICS.items():
+        value = evaluation.get(metric_name)
+        if _is_finite_number(value) and not minimum <= value <= maximum:
+            errors.append(
+                f"eval.{metric_name}={value} 超出范围 [{minimum}, {maximum}]")
+    for metric_name in NON_NEGATIVE_EVAL_METRICS:
+        value = evaluation.get(metric_name)
+        if _is_finite_number(value) and value < 0.0:
+            errors.append(f"eval.{metric_name}={value} 不能为负数")
+
+    turn_count = evaluation.get("turn_count")
+    if _is_finite_number(turn_count) and (
+            not isinstance(turn_count, int) or turn_count < 0):
+        errors.append("eval.turn_count 必须是非负整数")
+    net_area = evaluation.get("net_area")
+    if _is_finite_number(net_area) and net_area <= 0.0:
+        errors.append("eval.net_area 必须大于零")
 
     coverage_rate = evaluation.get("coverage_rate")
     if _is_finite_number(coverage_rate) and (
