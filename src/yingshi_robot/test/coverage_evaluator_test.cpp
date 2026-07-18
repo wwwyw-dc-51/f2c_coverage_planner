@@ -6,10 +6,10 @@
 
 TEST(CoverageScoring, CoverageGateReachesFullAtPassThreshold)
 {
-    EXPECT_DOUBLE_EQ(coverage_scoring::coverageGate(0.90, 0.995), 0.0);
+    EXPECT_DOUBLE_EQ(coverage_scoring::coverageGate(0.90, 0.99), 0.0);
     EXPECT_NEAR(
-        coverage_scoring::coverageGate(0.9475, 0.995), 0.125, 1e-12);
-    EXPECT_DOUBLE_EQ(coverage_scoring::coverageGate(0.995, 0.995), 1.0);
+        coverage_scoring::coverageGate(0.945, 0.99), 0.125, 1e-12);
+    EXPECT_DOUBLE_EQ(coverage_scoring::coverageGate(0.99, 0.99), 1.0);
 }
 
 TEST(CoverageScoring, DistanceScoreHasRealFifteenPercentTolerance)

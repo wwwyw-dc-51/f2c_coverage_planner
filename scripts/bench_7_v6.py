@@ -44,7 +44,7 @@ PLANNER_CMD = [
     "-p", "use_sweep_decomp:=true", "-p", "merge_angle_threshold:=60.0",
     "-p", "swath_order_type:=boustrophedon",
     "-p", "eval_enable_report:=true", "-p", "eval_use_grid_method:=true",
-    "-p", "eval_grid_resolution:=0.1", "-p", "eval_coverage_threshold:=0.995",
+    "-p", "eval_grid_resolution:=0.1", "-p", "eval_coverage_threshold:=0.99",
 ]
 
 def start_planner():

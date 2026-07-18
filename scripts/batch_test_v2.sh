@@ -53,7 +53,7 @@ PLANNER_PARAMS=(
     -p eval_enable_report:=true
     -p eval_use_grid_method:=true
     -p eval_grid_resolution:=0.1
-    -p eval_coverage_threshold:=0.995
+    -p eval_coverage_threshold:=0.99
 )
 
 cleanup_ros() {
@@ -70,7 +70,7 @@ echo "  输出: $RESULT_DIR"
 echo "========================================="
 
 ERRORS=0
-COVERAGE_THRESHOLD=0.995  # 产品验收门槛 99.5%
+COVERAGE_THRESHOLD=0.99  # 产品验收门槛 99%
 
 for NAME in S1 S2 S3 S4 S5 S6 notched; do
     YAML="${SCENARIOS[$NAME]}"

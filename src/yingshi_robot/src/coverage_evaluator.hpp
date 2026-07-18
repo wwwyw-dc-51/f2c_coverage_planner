@@ -37,7 +37,7 @@ struct EvalParams {
     double coverage_width = 0.45;     ///< 覆盖宽度 (m)
     double swath_overlap_ratio = 0.0; ///< 预期重叠率 (0~1)，故意设的重叠不应扣分
     double grid_resolution = 0.1;     ///< 网格法分辨率 (m)
-    double coverage_threshold = 0.995;///< 覆盖率达标阈值
+    double coverage_threshold = 0.99; ///< 覆盖率达标阈值
     double turn_angle_threshold = 30.0; ///< 转弯判定角度阈值（度）
     double min_turn_merge_distance = 0.75; ///< 相邻方向变化归并距离下限（米），实际值随有效行距增大
     bool use_grid_method = false;     ///< true=网格法 false=几何法

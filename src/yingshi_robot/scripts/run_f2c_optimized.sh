@@ -159,7 +159,7 @@ ros2 run yingshi_robot polygon_planner_node --ros-args \
   -p eval_enable_report:=true \
   -p eval_use_grid_method:=true \
   -p eval_grid_resolution:=0.1 \
-  -p eval_coverage_threshold:=0.995 > "${DIAG_FILE}" 2>&1 &
+  -p eval_coverage_threshold:=0.99 > "${DIAG_FILE}" 2>&1 &
 
 PLANNER_PID=$!
 

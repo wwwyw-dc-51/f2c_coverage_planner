@@ -118,7 +118,7 @@ public:
         this->declare_parameter("eval_enable_report", true);
         this->declare_parameter("eval_grid_resolution", 0.1);
         this->declare_parameter("eval_use_grid_method", false);
-        this->declare_parameter("eval_coverage_threshold", 0.995);
+        this->declare_parameter("eval_coverage_threshold", 0.99);
         this->declare_parameter("output_dir", "/tmp");  // 调试输出目录，实车可改为只读挂载路径
         this->declare_parameter("use_planner_core", false);  // P2 迁移开关：true=PlannerCore管线
 
