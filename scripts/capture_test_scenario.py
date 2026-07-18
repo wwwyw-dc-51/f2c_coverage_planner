@@ -158,9 +158,16 @@ class TestCapture(Node):
                         r'CSPACE_REPORT polygon=1 valid=true '
                         r'.*?components=(\d+)', content)
                     expected = int(component_matches[-1]) if component_matches else 1
-                    completed = len(re.findall(
-                        r'综合得分[:\s]*[\d.]+', content))
-                    if completed >= expected:
+                    completion_matches = re.findall(
+                        r'PLANNERCORE_COMPLETE polygon=1 components=(\d+)',
+                        content)
+                    paths_complete = (
+                        self.path_received and (
+                            expected == 1 or
+                            len(self.component_paths) >= expected))
+                    if (completion_matches and
+                            int(completion_matches[-1]) == expected and
+                            paths_complete):
                         self.eval_text = content
                         print(f'  Evaluation complete after {i+1}s')
                         break

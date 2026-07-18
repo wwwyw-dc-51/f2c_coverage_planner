@@ -2217,6 +2217,9 @@ private:
         double total_ms = std::chrono::duration<double, std::milli>(
             planning_end - planning_start).count();
         RCLCPP_INFO(this->get_logger(),
+            "PLANNERCORE_COMPLETE polygon=%d components=%zu",
+            polygon_id, result.component_plans.size());
+        RCLCPP_INFO(this->get_logger(),
             "PlannerCore done: %zu path waypoints, %.1f ms total (plan=%.1f ms)",
             published_waypoint_count, total_ms, result.planning_time_ms);
         } catch (const std::exception& exception) {

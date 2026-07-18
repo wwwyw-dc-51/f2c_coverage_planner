@@ -210,8 +210,16 @@ for i in range(120):
                 content)
             expected_evaluations = (
                 int(component_matches[-1]) if component_matches else 1)
-            completed_evaluations = len(re.findall(r'综合得分[:\s]*[\d.]+', content))
-            if completed_evaluations >= expected_evaluations:
+            completion_matches = re.findall(
+                r'PLANNERCORE_COMPLETE polygon=1 components=(\d+)',
+                content)
+            paths_complete = (
+                plan_received and (
+                    expected_evaluations == 1 or
+                    len(component_path_data) >= expected_evaluations))
+            if (completion_matches and
+                    int(completion_matches[-1]) == expected_evaluations and
+                    paths_complete):
                 print(f'  Eval complete after {i+1}s')
                 eval_found = True
                 break

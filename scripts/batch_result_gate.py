@@ -118,6 +118,8 @@ def validate_report(report, coverage_threshold=0.99):
 
     path = report.get("path")
     if is_multi_component:
+        if path not in (None, []):
+            errors.append("多分量报告的顶层 path 必须为空，禁止跨区展平")
         component_paths = report.get("component_paths")
         if (not isinstance(component_paths, list) or
                 len(component_paths) != component_count_hint):

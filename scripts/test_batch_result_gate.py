@@ -78,6 +78,17 @@ class BatchResultGateTest(unittest.TestCase):
 
                 self.assertTrue(any(field_name in error for error in errors))
 
+    def test_rejects_a_flattened_top_level_multi_component_path(self):
+        report = valid_multi_component_report()
+        report["path"] = [
+            {"x": 0.0, "y": 0.0},
+            {"x": 6.0, "y": 0.0},
+        ]
+
+        errors = validate_report(report)
+
+        self.assertTrue(any("禁止跨区展平" in error for error in errors))
+
     def test_rejects_one_failing_component_evaluation(self):
         report = valid_multi_component_report()
         report["component_evals"][0]["coverage_rate"] = 98.0
