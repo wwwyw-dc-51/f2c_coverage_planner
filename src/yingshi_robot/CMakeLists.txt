@@ -46,6 +46,7 @@ add_library(coverage_planner_core STATIC
   src/swath_generator.cpp
   src/boundary_filler.cpp
   src/path_planner.cpp
+  src/traversability.cpp
   src/planner_core.cpp
 )
 add_library(${PROJECT_NAME}::coverage_planner_core ALIAS coverage_planner_core)
@@ -158,6 +159,13 @@ if(BUILD_TESTING)
     test/planner_config_test.cpp
   )
   target_link_libraries(planner_config_test
+    coverage_planner_core
+  )
+
+  ament_add_gtest(traversability_test
+    test/traversability_test.cpp
+  )
+  target_link_libraries(traversability_test
     coverage_planner_core
   )
 
