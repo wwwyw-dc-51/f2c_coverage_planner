@@ -92,6 +92,7 @@ for NAME in S1 S2 S3 S4 S5 S6 S7 notched; do
     rm -f "$VIS_JSON" "$GRID_JSON" "$DATA_FILE" \
         "${GRID_JSON%.json}"_component_*.json \
         "$RESULT_DIR/${NAME}_grid.json" \
+        "${RESULT_DIR}/${NAME}_grid_component_"*.json \
         "$RESULT_DIR/${NAME}_coverage.png" \
         "$RESULT_DIR/${NAME}_cells.png" \
         "$RESULT_DIR/${NAME}_connections.png"
