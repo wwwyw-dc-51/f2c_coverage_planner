@@ -388,21 +388,29 @@ TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
         true,
         {0.5 * std::acos(-1.0)});
 
-    bool found_left_boundary_fill = false;
-    bool found_right_boundary_fill = false;
+    // 左侧：首条主 swath 中心在 r_w/2=0.4365，半覆盖 0.45 已盖到 x=0，
+    // fillBoundaryGaps 不会生成 x=0.45 补线 → 只断言确实没有旧偏移位置的补线。
+    // 右侧：末条主 swath 在 1.3095，半覆盖仅到 1.7595，需要补线。
+    //   正确实现 → 2.0 - 0.90/2 = 1.55
+    //   旧错误实现 → 2.0 - 0.873/2 = 1.5635
+    bool found_right_at_correct_offset = false;   // x ≈ 1.55
+    bool found_right_at_old_wrong_offset = false; // x ≈ 1.5635
     for (size_t cell_index = 0; cell_index < generated.size(); ++cell_index) {
         const auto& swaths = generated.at(cell_index);
         for (size_t swath_index = 0; swath_index < swaths.size(); ++swath_index) {
             const auto& swath = swaths.at(swath_index);
             const double mid_x = 0.5 * (
                 swath.startPoint().getX() + swath.endPoint().getX());
-            found_left_boundary_fill |= std::abs(mid_x - 0.45) < 1e-6;
-            found_right_boundary_fill |= std::abs(mid_x - 1.55) < 1e-6;
+            found_right_at_correct_offset |= std::abs(mid_x - 1.55) < 1e-6;
+            found_right_at_old_wrong_offset |=
+                std::abs(mid_x - 1.5635) < 1e-6;
         }
     }
 
-    EXPECT_TRUE(found_left_boundary_fill);
-    EXPECT_TRUE(found_right_boundary_fill);
+    EXPECT_TRUE(found_right_at_correct_offset)
+        << "Right boundary fill should use coverage_width (center at 1.55)";
+    EXPECT_FALSE(found_right_at_old_wrong_offset)
+        << "Old row-spacing offset (1.5635) must not appear";
 }
 
 TEST(BoundaryFill, RebalancesNearCoincidentSwathsInASingleNarrowRectangle)
