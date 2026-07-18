@@ -24,7 +24,8 @@ void fillBoundaryGaps(
     double swath_angle,
     double cov_width,
     double shrink_dist,
-    double robot_half_width = 0.0);
+    double robot_half_width = 0.0,
+    double boundary_offset_override = -1.0);
 
 // 单 Cell 窄矩形中，边界补线可能与 F2C 主 swath 近重合。
 // 将这类轨迹重排为边界锚定的等距 swath，在不留下覆盖间隙的前提下

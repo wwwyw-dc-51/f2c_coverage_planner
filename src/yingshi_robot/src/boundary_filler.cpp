@@ -325,7 +325,8 @@ void fillBoundaryGaps(
     double swath_angle,
     double cov_width,
     double shrink_dist,
-    double robot_half_width)
+    double robot_half_width,
+    double boundary_offset_override)
 {
     if (cell_swaths.size() == 0) return;
     const auto& cell_ring = cell.getExteriorRing();
@@ -333,7 +334,9 @@ void fillBoundaryGaps(
     const auto& poly_ring = full_polygon.getExteriorRing();
 
     // 此偏移只保证覆盖工具贴边；机器人外形净空需要单独校验。
-    double boundary_offset = cov_width * 0.5;
+    const double boundary_offset = boundary_offset_override >= 0.0
+        ? boundary_offset_override
+        : cov_width * 0.5;
     (void)robot_half_width;  // 保留接口兼容性，当前不参与边界补线偏移。
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 

@@ -14,6 +14,8 @@
 #include <memory>
 #include <fields2cover.h>
 
+#include "yingshi_robot/traversability.hpp"
+
 namespace yingshi {
 
 // ========== 规划请求（不可变配置 + 几何输入）==========
@@ -63,6 +65,36 @@ struct PlanningRequest {
     std::string boundary_type = "closed";
     double boundary_coverage_margin = -0.3;
     double boundary_open_default_margin = -0.3;
+
+    // ── C-space 可通行性前处理 ──
+    bool traversability_enabled = false;
+    double cspace_clearance_margin = 0.0;
+    double max_excluded_area_ratio = 0.05;
+};
+
+// 单个中心可达分量的独立规划结果。分量之间没有隐式连线；
+// 上层必须显式安排重定位，不能把多个 Path 展平成一条路径。
+struct PlanningComponentResult {
+    std::size_t component_index = 0;
+    f2c::types::Cell planning_polygon;
+    f2c::types::Cells coverage_target;
+
+    f2c::types::Path path;
+    std::vector<f2c::types::Point> path_points;
+    std::vector<f2c::types::Point> path_waypoints;
+    f2c::types::SwathsByCells cells_with_swaths;
+    f2c::types::Route route;
+    std::vector<size_t> cell_order;
+    size_t total_swaths = 0;
+    size_t total_connections = 0;
+
+    double planning_time_ms = 0.0;
+    size_t hole_crossing_segments = 0;
+    size_t out_of_planning_area_segments = 0;
+    bool path_has_crossings = false;
+    bool path_leaves_planning_area = false;
+    bool success = false;
+    std::string error_message;
 };
 
 // ========== 规划结果（不可变输出）==========
@@ -82,7 +114,13 @@ struct PlanningResult {
     // ── 诊断信息 ──
     double planning_time_ms = 0.0;
     size_t hole_crossing_segments = 0;               // 穿洞段数（0 = 安全）
+    size_t out_of_planning_area_segments = 0;
     bool path_has_crossings = false;
+    bool path_leaves_planning_area = false;
+
+    // ── C-space 诊断与分量结果 ──
+    TraversabilityResult traversability;
+    std::vector<PlanningComponentResult> component_plans;
 
     // ── 状态 ──
     bool success = false;

@@ -80,6 +80,27 @@ TEST(BoundaryFill, SkipsOuterFillWhenExistingSwathAlreadyCoversBoundary)
     EXPECT_EQ(swaths.size(), 2U);
 }
 
+TEST(BoundaryFill, HonorsAnExplicitPreclearedBoundaryOffset)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto bottom_cell = makeRectangle(0.0, 0.0, 10.0, 1.2);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 0.8, 9.85, 0.8, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, bottom_cell, full_polygon, 0.0, 0.90, 0.0,
+        0.0, 0.10);
+
+    bool found_precleared_fill = false;
+    for (std::size_t i = 0; i < swaths.size(); ++i) {
+        if (std::abs(swathMidY(swaths.at(i)) - 0.10) < 1e-9) {
+            found_precleared_fill = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_precleared_fill);
+}
+
 TEST(BoundaryFill, KeepsOuterFillWhenSlantedSwathEndpointLeavesBoundaryGap)
 {
     const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);

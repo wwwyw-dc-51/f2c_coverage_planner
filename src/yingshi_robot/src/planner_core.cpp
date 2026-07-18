@@ -15,6 +15,7 @@
 #include <fields2cover/path_planning/reeds_shepp_curves.h>
 #include <chrono>
 #include <cmath>
+#include <utility>
 
 namespace yingshi {
 
@@ -34,6 +35,32 @@ size_t countCrossings(
             ++n;
     }
     return n;
+}
+
+size_t countSegmentsOutsideCell(
+    const std::vector<f2c::types::Point>& points,
+    const f2c::types::Cell& cell)
+{
+    if (points.size() < 2) return 0;
+    f2c::types::Cells allowed;
+    allowed.addGeometry(cell);
+    std::size_t violations = 0;
+    for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+        f2c::types::LineString segment;
+        segment.addPoint(points[i]);
+        segment.addPoint(points[i + 1]);
+        const double segment_length = segment.length();
+        if (segment_length <= 1e-9) continue;
+        const auto inside_parts = allowed.getLinesInside(segment);
+        double inside_length = 0.0;
+        for (std::size_t j = 0; j < inside_parts.size(); ++j) {
+            inside_length += inside_parts.getGeometry(j).length();
+        }
+        if (inside_length + 1e-5 < segment_length) {
+            ++violations;
+        }
+    }
+    return violations;
 }
 
 // ── 构建 F2C Robot ──
@@ -100,9 +127,18 @@ f2c::types::Route buildSnakeRoute(
 
 }  // namespace
 
-PlanningResult PlannerCore::plan(const PlanningRequest& req)
+namespace {
+
+PlanningComponentResult planSingleComponent(
+    const PlanningRequest& req,
+    std::size_t component_index,
+    const f2c::types::Cells& coverage_target,
+    bool cspace_constrained)
 {
-    PlanningResult result;
+    PlanningComponentResult result;
+    result.component_index = component_index;
+    result.planning_polygon = req.polygon;
+    result.coverage_target = coverage_target;
     auto t0 = std::chrono::steady_clock::now();
 
     try {
@@ -184,7 +220,8 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
             generateSwathsForAllCells(
                 no_hl, req.polygon, r_w, req.coverage_width,
                 req.swath_endpoint_shrink_distance, req.min_swath_length,
-                req.swath_angle_optimization, req.swath_angle_candidates);
+                req.swath_angle_optimization, req.swath_angle_candidates,
+                cspace_constrained ? 1e-4 : -1.0);
 
         if (swaths_by_cells.sizeTotal() == 0) {
             result.error_message = "No swaths generated";
@@ -220,10 +257,13 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
 
         // ── 8. 孔洞感知修复（genRoute 后立即修）──
         if (!req.holes.empty()) {
+            const double connection_clearance = cspace_constrained
+                ? 1e-4
+                : req.coverage_width * 0.5;
             repairRouteConnectionsAroundHoles(
-                route, req.holes, req.coverage_width * 0.5);
+                route, req.holes, connection_clearance);
             synchronizeRouteConnectionEndpoints(
-                route, req.coverage_width * 0.5);
+                route, connection_clearance);
         }
 
         // ── 9. 边界策略：闭合边界收缩端点 / 开放边界延伸 ──
@@ -290,9 +330,19 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
             countCrossings(result.path_points, req.holes);
         result.path_has_crossings =
             (result.hole_crossing_segments > 0);
+        if (cspace_constrained) {
+            result.out_of_planning_area_segments =
+                countSegmentsOutsideCell(
+                    result.path_points, req.polygon);
+            result.path_leaves_planning_area =
+                result.out_of_planning_area_segments > 0;
+        }
         if (result.path_has_crossings) {
             result.error_message =
                 "Planned path crosses obstacle holes";
+        } else if (result.path_leaves_planning_area) {
+            result.error_message =
+                "Planned path leaves the C-space planning area";
         }
 
         // ── 12. 组装结果 ──
@@ -301,7 +351,8 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
         result.cell_order = cell_order;
         result.total_swaths = swaths_by_cells.sizeTotal();
         result.total_connections = route.sizeConnections();
-        result.success = !result.path_has_crossings;
+        result.success = !result.path_has_crossings &&
+            !result.path_leaves_planning_area;
 
     } catch (const std::exception& e) {
         result.success = false;
@@ -314,6 +365,143 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
     auto t1 = std::chrono::steady_clock::now();
     result.planning_time_ms =
         std::chrono::duration<double, std::milli>(t1 - t0).count();
+    return result;
+}
+
+std::vector<f2c::types::LinearRing> interiorRings(
+    const f2c::types::Cell& cell)
+{
+    std::vector<f2c::types::LinearRing> rings;
+    if (cell.size() > 1) {
+        rings.reserve(cell.size() - 1);
+    }
+    for (std::size_t i = 0; i + 1 < cell.size(); ++i) {
+        rings.push_back(cell.getInteriorRing(i));
+    }
+    return rings;
+}
+
+void exposeSingleComponent(
+    const PlanningComponentResult& component,
+    PlanningResult& result)
+{
+    result.path = component.path;
+    result.path_points = component.path_points;
+    result.path_waypoints = component.path_waypoints;
+    result.cells_with_swaths = component.cells_with_swaths;
+    result.route = component.route;
+    result.cell_order = component.cell_order;
+    result.total_swaths = component.total_swaths;
+    result.total_connections = component.total_connections;
+    result.hole_crossing_segments = component.hole_crossing_segments;
+    result.out_of_planning_area_segments =
+        component.out_of_planning_area_segments;
+    result.path_has_crossings = component.path_has_crossings;
+    result.path_leaves_planning_area =
+        component.path_leaves_planning_area;
+}
+
+}  // namespace
+
+PlanningResult PlannerCore::plan(const PlanningRequest& req)
+{
+    PlanningResult result;
+    const auto planning_start = std::chrono::steady_clock::now();
+
+    if (!req.traversability_enabled) {
+        f2c::types::Cells coverage_target;
+        coverage_target.addGeometry(req.polygon);
+        auto component = planSingleComponent(
+            req, 0, coverage_target, false);
+        result.component_plans.push_back(component);
+        exposeSingleComponent(component, result);
+        result.success = component.success;
+        result.error_message = component.error_message;
+    } else {
+        TraversabilityParams params;
+        params.robot_width = req.robot_width;
+        params.clearance_margin = req.cspace_clearance_margin;
+        params.max_excluded_area_ratio = req.max_excluded_area_ratio;
+        result.traversability = analyzeTraversability(req.polygon, params);
+
+        if (!result.traversability.analysis_valid) {
+            result.error_message = "C-space analysis failed: " +
+                result.traversability.error_message;
+        } else if (result.traversability.component_count == 0) {
+            result.error_message = "C-space has no traversable component";
+        } else if (result.traversability.exclusion_limit_exceeded) {
+            result.error_message =
+                "C-space exclusion gate exceeded: excluded ratio " +
+                std::to_string(
+                    result.traversability.excluded_area_ratio) +
+                " is greater than configured maximum " +
+                std::to_string(req.max_excluded_area_ratio);
+        } else {
+            bool all_components_succeeded = true;
+            for (std::size_t i = 0;
+                 i < result.traversability.coverage_components.size(); ++i) {
+                const auto& coverage_component =
+                    result.traversability.coverage_components[i];
+                if (coverage_component.size() != 1) {
+                    result.error_message =
+                        "C-space coverage recovery produced an invalid "
+                        "component at index " + std::to_string(i);
+                    all_components_succeeded = false;
+                    break;
+                }
+
+                PlanningRequest component_request = req;
+                component_request.polygon =
+                    result.traversability.center_space.getGeometry(i);
+                component_request.holes =
+                    interiorRings(component_request.polygon);
+                component_request.traversability_enabled = false;
+
+                auto component = planSingleComponent(
+                    component_request, i, coverage_component, true);
+                result.total_swaths += component.total_swaths;
+                result.total_connections += component.total_connections;
+                result.hole_crossing_segments +=
+                    component.hole_crossing_segments;
+                result.out_of_planning_area_segments +=
+                    component.out_of_planning_area_segments;
+                result.path_has_crossings =
+                    result.path_has_crossings ||
+                    component.path_has_crossings;
+                result.path_leaves_planning_area =
+                    result.path_leaves_planning_area ||
+                    component.path_leaves_planning_area;
+                if (!component.success) {
+                    result.error_message =
+                        "C-space component " + std::to_string(i) +
+                        " failed: " + component.error_message;
+                    all_components_succeeded = false;
+                }
+                result.component_plans.push_back(std::move(component));
+                if (!all_components_succeeded) {
+                    break;
+                }
+            }
+
+            if (all_components_succeeded &&
+                result.component_plans.size() ==
+                    result.traversability.component_count) {
+                result.success = true;
+                if (result.component_plans.size() == 1) {
+                    exposeSingleComponent(
+                        result.component_plans.front(), result);
+                }
+            } else if (all_components_succeeded) {
+                result.error_message =
+                    "C-space component count changed during planning";
+            }
+        }
+    }
+
+    const auto planning_end = std::chrono::steady_clock::now();
+    result.planning_time_ms =
+        std::chrono::duration<double, std::milli>(
+            planning_end - planning_start).count();
     return result;
 }
 
