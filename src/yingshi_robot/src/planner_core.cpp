@@ -146,50 +146,119 @@ PlanningComponentResult planSingleComponent(
         f2c::types::Robot robot = makeRobot(req);
         double r_w = req.coverage_width * (1.0 - req.swath_overlap_ratio);
 
-        // ── 2. 生成 headlands ──
+        // ── 2. 生成 headlands（含自适应 + Phase 4A 对齐旋转 + 逐 cell 自适应）──
         f2c::hg::ConstHL hl_gen;
         f2c::types::Cells field;
         field.addGeometry(req.polygon);
 
-        double mid_hl_w = req.mid_hl_width_ratio * req.robot_width;
+        // 自适应 headland：检测多边形最小通道宽度
+        double effective_mid_hl_ratio = req.mid_hl_width_ratio;
+        double effective_no_hl_ratio = req.no_hl_width_ratio;
+        {
+            const auto& ring = req.polygon.getExteriorRing();
+            double min_passage = std::numeric_limits<double>::max();
+            size_t n = ring.size();
+            for (size_t i = 0; i < n; ++i) {
+                size_t i_next = (i + 1) % n;
+                for (size_t j = i + 2; j < n; ++j) {
+                    size_t j_next = (j + 1) % n;
+                    if (j == i || j == i_next || j_next == i) continue;
+                    double d1 = std::hypot(ring.getGeometry(i).getX() - ring.getGeometry(j).getX(), ring.getGeometry(i).getY() - ring.getGeometry(j).getY());
+                    double d2 = std::hypot(ring.getGeometry(i).getX() - ring.getGeometry(j_next).getX(), ring.getGeometry(i).getY() - ring.getGeometry(j_next).getY());
+                    double d3 = std::hypot(ring.getGeometry(i_next).getX() - ring.getGeometry(j).getX(), ring.getGeometry(i_next).getY() - ring.getGeometry(j).getY());
+                    double d4 = std::hypot(ring.getGeometry(i_next).getX() - ring.getGeometry(j_next).getX(), ring.getGeometry(i_next).getY() - ring.getGeometry(j_next).getY());
+                    min_passage = std::min({min_passage, d1, d2, d3, d4});
+                }
+            }
+            if (min_passage < 10.0 && min_passage > 0.01) {
+                double total_hl_erosion = (req.mid_hl_width_ratio + req.no_hl_width_ratio) * req.robot_width;
+                double eroded_passage = min_passage - 2.0 * total_hl_erosion;
+                if (eroded_passage < r_w) {
+                    double max_erosion = std::max(0.0, (min_passage - r_w) / 2.0);
+                    double max_ratio = max_erosion / req.robot_width;
+                    double total_ratio = req.mid_hl_width_ratio + req.no_hl_width_ratio;
+                    if (total_ratio > 1e-9) {
+                        double scale = max_ratio / total_ratio;
+                        effective_mid_hl_ratio = req.mid_hl_width_ratio * scale;
+                        effective_no_hl_ratio = req.no_hl_width_ratio * scale;
+                    }
+                }
+            }
+        }
+
+        double mid_hl_w = effective_mid_hl_ratio * req.robot_width;
         f2c::types::Cells mid_hl;
-        if (mid_hl_w > 1e-6 && req.decomposition_enabled) {
+        if (mid_hl_w > 1e-6) {
             mid_hl = hl_gen.generateHeadlands(field, mid_hl_w);
             if (mid_hl.size() > 0) mid_hl = simplifyCells(mid_hl, 5.0);
+        }
+
+        // Phase 4A: Sweep 对齐旋转 — 检测最长边方向，旋转后分解再转回
+        double sweep_align_angle = 0.0;
+        if (req.use_sweep_decomp && req.polygon.size() > 0) {
+            const auto& poly_ext = req.polygon.getExteriorRing();
+            double longest_edge_len = 0.0;
+            for (size_t pi = 0; pi + 1 < poly_ext.size(); ++pi) {
+                double dx = poly_ext.getGeometry(pi+1).getX() - poly_ext.getGeometry(pi).getX();
+                double dy = poly_ext.getGeometry(pi+1).getY() - poly_ext.getGeometry(pi).getY();
+                double el = std::hypot(dx, dy);
+                if (el > longest_edge_len) { longest_edge_len = el; sweep_align_angle = std::atan2(dy, dx); }
+            }
+            while (sweep_align_angle > M_PI/2) sweep_align_angle -= M_PI;
+            while (sweep_align_angle <= -M_PI/2) sweep_align_angle += M_PI;
+            if (std::abs(sweep_align_angle) < 10.0 * M_PI / 180.0) sweep_align_angle = 0.0;
         }
 
         f2c::types::Cells no_hl;
         if (req.decomposition_enabled && mid_hl.size() > 0) {
             for (size_t ci = 0; ci < mid_hl.size(); ++ci) {
-                f2c::types::Cell work = mid_hl.getGeometry(ci);
-                f2c::types::Cell grid = (ci < field.size())
-                    ? field.getGeometry(ci) : work;
+                f2c::types::Cell work_cell = mid_hl.getGeometry(ci);
+                f2c::types::Cell grid_cell = (ci < field.size()) ? field.getGeometry(ci) : work_cell;
                 DecomposerParams dparams;
                 dparams.use_sweep = req.use_sweep_decomp;
-                auto decomposed = rectilinearDecompose(work, grid, dparams);
-                // 对每个分解后的 cell 施加 secondary headland 侵蚀
-                double no_hl_w = req.no_hl_width_ratio * req.robot_width;
+
+                f2c::types::Cells decomposed;
+                if (std::abs(sweep_align_angle) > 0.001) {
+                    auto rotated = rotateCell(work_cell, -sweep_align_angle);
+                    auto rotated_grid = rotateCell(grid_cell, -sweep_align_angle);
+                    dparams.use_sweep = true;
+                    auto sub = rectilinearDecompose(rotated, rotated_grid, dparams);
+                    for (size_t si = 0; si < sub.size(); ++si)
+                        decomposed.addGeometry(rotateCell(sub.getGeometry(si), sweep_align_angle));
+                } else {
+                    decomposed = rectilinearDecompose(work_cell, grid_cell, dparams);
+                }
+
+                // 逐 cell 自适应 no_hl
+                double cell_no_hl_ratio = effective_no_hl_ratio;
+                {
+                    double cell_perimeter = work_cell.getExteriorRing().length();
+                    double cell_area = work_cell.area();
+                    double est_width = (cell_perimeter > 1e-9) ? (2.0 * cell_area / cell_perimeter) : 0.0;
+                    double required = r_w + 0.05;
+                    double eroded_width = est_width - 2.0 * cell_no_hl_ratio * req.robot_width;
+                    if (eroded_width < required && est_width > 0.01) {
+                        double max_erosion = std::max(0.0, (est_width - required) / 2.0);
+                        cell_no_hl_ratio = std::max(0.0, max_erosion / req.robot_width);
+                    }
+                }
+
+                double no_hl_w = cell_no_hl_ratio * req.robot_width;
                 if (no_hl_w > 1e-6) {
                     for (size_t di = 0; di < decomposed.size(); ++di) {
                         f2c::types::Cells single;
                         single.addGeometry(decomposed.getGeometry(di));
                         auto eroded = hl_gen.generateHeadlands(single, no_hl_w);
-                        for (size_t ei = 0; ei < eroded.size(); ++ei)
-                            no_hl.addGeometry(eroded.getGeometry(ei));
+                        for (size_t ei = 0; ei < eroded.size(); ++ei) no_hl.addGeometry(eroded.getGeometry(ei));
                     }
                 } else {
-                    for (size_t di = 0; di < decomposed.size(); ++di)
-                        no_hl.addGeometry(decomposed.getGeometry(di));
+                    for (size_t di = 0; di < decomposed.size(); ++di) no_hl.addGeometry(decomposed.getGeometry(di));
                 }
             }
         } else {
-            // 不分解：对 polygon 整体施加 no_hl 侵蚀
-            double no_hl_w = req.no_hl_width_ratio * req.robot_width;
-            if (no_hl_w > 1e-6) {
-                no_hl = hl_gen.generateHeadlands(field, no_hl_w);
-            } else {
-                no_hl.addGeometry(req.polygon);
-            }
+            double no_hl_w = effective_no_hl_ratio * req.robot_width;
+            if (no_hl_w > 1e-6) { no_hl = hl_gen.generateHeadlands(field, no_hl_w); }
+            else { no_hl.addGeometry(req.polygon); }
         }
 
         if (no_hl.size() == 0) {
@@ -221,7 +290,8 @@ PlanningComponentResult planSingleComponent(
                 no_hl, req.polygon, r_w, req.coverage_width,
                 req.swath_endpoint_shrink_distance, req.min_swath_length,
                 req.swath_angle_optimization, req.swath_angle_candidates,
-                cspace_constrained ? 1e-4 : -1.0);
+                cspace_constrained ? 1e-4 : -1.0,
+                req.use_sweep_decomp);
 
         if (swaths_by_cells.sizeTotal() == 0) {
             result.error_message = "No swaths generated";
@@ -349,6 +419,7 @@ PlanningComponentResult planSingleComponent(
         result.cells_with_swaths = swaths_by_cells;
         result.route = route;
         result.cell_order = cell_order;
+        result.decomposition_cells = no_hl;
         result.total_swaths = swaths_by_cells.sizeTotal();
         result.total_connections = route.sizeConnections();
         result.success = !result.path_has_crossings &&

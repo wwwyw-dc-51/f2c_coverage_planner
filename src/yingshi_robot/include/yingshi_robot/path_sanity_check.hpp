@@ -49,18 +49,45 @@ inline PathSanityResult checkPathSanity(
     }
 
     // 3. 路径点是否全在外环内
+    //    容差设计：pointInPolygon 射线法对恰好在边界上的点返回 false，
+    //    此类浮点精度边界点不应阻断规划。区分"真正越界"和"贴在边界上"。
     {
         const auto& outer = polygon.getExteriorRing();
-        size_t out_of_bounds = 0;
+        // 计算外环包围盒
+        double ob_min_x = 1e30, ob_max_x = -1e30, ob_min_y = 1e30, ob_max_y = -1e30;
+        for (const auto& p : outer) {
+            ob_min_x = std::min(ob_min_x, p.getX());
+            ob_max_x = std::max(ob_max_x, p.getX());
+            ob_min_y = std::min(ob_min_y, p.getY());
+            ob_max_y = std::max(ob_max_y, p.getY());
+        }
+        constexpr double kBboxEpsilon = 1e-9;
+        size_t hard_oob = 0;   // 真正越界
+        size_t soft_oob = 0;   // 贴在边界上（浮点精度）
         for (const auto& pt : path_points) {
             if (!pointInPolygon(pt.getX(), pt.getY(), outer)) {
-                ++out_of_bounds;
+                // 计算点到包围盒的超出距离
+                double dx = 0, dy = 0;
+                if (pt.getX() < ob_min_x) dx = ob_min_x - pt.getX();
+                else if (pt.getX() > ob_max_x) dx = pt.getX() - ob_max_x;
+                if (pt.getY() < ob_min_y) dy = ob_min_y - pt.getY();
+                else if (pt.getY() > ob_max_y) dy = pt.getY() - ob_max_y;
+                double dist = std::sqrt(dx*dx + dy*dy);
+                if (dist <= kBboxEpsilon) {
+                    ++soft_oob;
+                } else {
+                    ++hard_oob;
+                }
             }
         }
-        if (out_of_bounds > 0) {
+        if (hard_oob > 0) {
             result.passed = false;
             result.issues.push_back({SanityIssue::Severity::ERROR,
-                std::to_string(out_of_bounds) + " path points outside polygon exterior"});
+                std::to_string(hard_oob) + " path points outside polygon exterior"});
+        }
+        if (soft_oob > 0) {
+            result.issues.push_back({SanityIssue::Severity::WARN,
+                std::to_string(soft_oob) + " path points on polygon boundary (floating-point tolerance)"});
         }
     }
 

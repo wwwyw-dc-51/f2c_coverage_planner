@@ -33,7 +33,6 @@ PLANNER_PARAMS=(
     -p mid_hl_width_ratio:=0.20
     -p no_hl_width_ratio:=0.0
     -p min_hole_area:=0.0
-    -p traversability_enabled:=true
     -p cspace_clearance_margin:=0.0
     -p max_excluded_area_ratio:=0.05
     -p decomposition_angle:=0.0
@@ -253,6 +252,9 @@ if eval_found:
         'turn_count': extract(r'^转弯次数:\s*(\d+)\s*$', text, int, re.MULTILINE),
         'overlap_rate': extract(r'重叠率[:\s]*([\d.]+)%', text),
         'planning_time_ms': extract(r'规划耗时[:\s]*([\d.]+)\s*ms', text),
+        'corrected_coverage_rate': extract(r'修正后覆盖率[:\s]*([\d.]+)%', text),
+        'unreachable_gap_count': extract(
+            r'物理不可达空隙[:\s]*(\d+)', text, int),
     }
     m = re.findall(r'目标净面积[:\s]*(-?[\d.]+)', text)
     if m: result['net_area'] = float(m[-1])
@@ -457,8 +459,8 @@ lines.append("="*70)
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 lines.append(f"生成时间: {now}")
 lines.append("")
-lines.append("| 场景 | 面积 | 覆盖率 | 得分 | 未覆盖 | 路径长 | 重叠率 | 耗时 |")
-lines.append("|:----:|:----:|:-----:|:----:|:-----:|:-----:|:-----:|:---:|")
+lines.append("| 场景 | 面积 | 覆盖率 | 修正覆盖率 | 得分 | 未覆盖 | 路径长 | 重叠率 | 耗时 |")
+lines.append("|:----:|:----:|:-----:|:--------:|:----:|:-----:|:-----:|:-----:|:---:|")
 for n in ['S1','S2','S3','S4','S5','S6','S7','notched']:
     df = f'{rd}/{n}_data.json'
     if os.path.exists(df):
@@ -478,12 +480,14 @@ for n in ['S1','S2','S3','S4','S5','S6','S7','notched']:
                 }
         a = e.get('net_area',0) or 0
         c = e.get('coverage_rate',0) or 0
+        cc = e.get('corrected_coverage_rate')  # 可能为空
         s = e.get('single_score',0) or 0
         u = e.get('uncovered_area',0) or 0
         d = e.get('total_distance',0) or 0
         o = e.get('overlap_rate',0) or 0
         t = e.get('planning_time_ms',0) or 0
-        lines.append(f"| {n} | {a:.0f} | {c:.2f}% | {s:.1f} | {u:.2f} | {d:.1f} | {o:.1f}% | {t:.0f} |")
+        cc_str = f"{cc:.2f}%" if cc is not None else "—"
+        lines.append(f"| {n} | {a:.0f} | {c:.2f}% | {cc_str} | {s:.1f} | {u:.2f} | {d:.1f} | {o:.1f}% | {t:.0f} |")
 lines.append("")
 lines.append(f"报告目录: {rd}")
 

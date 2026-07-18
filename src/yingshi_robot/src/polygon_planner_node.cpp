@@ -114,7 +114,7 @@ public:
         this->declare_parameter("mid_hl_width_ratio", 0.20);  // mid_hl 宽度比例（相对于覆盖宽度）
         this->declare_parameter("no_hl_width_ratio", 0.0);   // no_hl 宽度比例（相对于覆盖宽度）
         this->declare_parameter("min_hole_area", 0.0);       // 已废弃：所有合法物理孔洞均保留
-        this->declare_parameter("traversability_enabled", true);
+        this->declare_parameter("traversability_enabled", false);
         this->declare_parameter("cspace_clearance_margin", 0.0);
         this->declare_parameter("max_excluded_area_ratio", 0.05);
         this->declare_parameter("swath_endpoint_shrink_distance", 0.03);  // 条带端点向中心收缩的距离（米），batch 实测最优值
@@ -2141,6 +2141,7 @@ private:
             eval_params.coverage_threshold = eval_coverage_threshold_;
             eval_params.turn_angle_threshold = 30.0;
             eval_params.use_grid_method = eval_use_grid_method_;
+            eval_params.robot_width = robot_width_;
 
             for (std::size_t component_index = 0;
                  component_index < result.component_plans.size();
@@ -3998,6 +3999,7 @@ private:
                 eval_params.coverage_threshold = eval_coverage_threshold_;
                 eval_params.turn_angle_threshold = 30.0;
                 eval_params.use_grid_method = eval_use_grid_method_;
+                eval_params.robot_width = robot_width_;
 
                 // 运行评估（与已发布路径同源；评估器会按 PathState 语义展开完整折线）
                 f2c::types::Cells full_polygon_cells; full_polygon_cells.addGeometry(cell);

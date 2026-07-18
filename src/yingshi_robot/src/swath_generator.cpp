@@ -285,7 +285,8 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
     double min_swath_length,
     bool swath_angle_optimization,
     const std::vector<double>& swath_angle_candidates,
-    double boundary_fill_offset)
+    double boundary_fill_offset,
+    bool use_sweep_decomp)
 {
     f2c::sg::BruteForce swath_gen;
     swath_gen.setAllowOverlap(true);
@@ -355,6 +356,12 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
         for (size_t ci = 0; ci < no_hl.size(); ++ci) {
             const auto& sub = no_hl.getGeometry(ci);
             double ang = computeCellMainDirection(sub);
+
+            // 斜边感知：sweep 分解产生的 cell 贴着斜边界时调整 swath 角度
+            if (use_sweep_decomp && full_polygon.size() > 0) {
+                double slant_ang = detectSlantedBoundaryAngle(sub, full_polygon, ang, coverage_width);
+                if (std::abs(slant_ang - ang) > 0.05) ang = slant_ang;
+            }
 
             f2c::types::Swaths cs;
             if (swath_angle_optimization) {

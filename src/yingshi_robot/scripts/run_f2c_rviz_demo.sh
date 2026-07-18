@@ -90,7 +90,6 @@ ros2 run yingshi_robot polygon_planner_node --ros-args \
   -p mid_hl_width_ratio:=0.20 \
   -p no_hl_width_ratio:=0.0 \
   -p min_hole_area:=0.0 \
-  -p traversability_enabled:=true \
   -p cspace_clearance_margin:=0.0 \
   -p max_excluded_area_ratio:=0.05 \
   -p decomposition_angle:=0.0 \

@@ -85,6 +85,7 @@ struct PlanningComponentResult {
     f2c::types::SwathsByCells cells_with_swaths;
     f2c::types::Route route;
     std::vector<size_t> cell_order;
+    f2c::types::Cells decomposition_cells;  // no_hl 分解后的 cell 几何（供可视化）
     size_t total_swaths = 0;
     size_t total_connections = 0;
 

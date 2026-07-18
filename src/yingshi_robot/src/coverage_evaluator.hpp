@@ -43,6 +43,7 @@ struct EvalParams {
     bool use_grid_method = true;      ///< true=网格法 false=几何法
     const char* turn_planner_type = "direct"; ///< 掉头模式，决定评分方案
     double full_net_area_override = -1.0; ///< 覆盖目标面积覆盖（>0 时覆盖 cell 面积计算），用于纠正headland侵蚀偏差
+    double robot_width = 0.75;         ///< 机器人宽度 (m)，用于空隙分类器判断物理可达性
 };
 
 /// 评估结果
@@ -93,7 +94,120 @@ struct EvalResult {
     double score_overlap = 0.0;
     double score_time = 0.0;
     double score_smoothness = 0.0;
+
+    // ── 空隙分类修正 ──
+    double corrected_net_area = 0.0;     ///< 扣除物理不可达空隙后的有效面积
+    double corrected_coverage_rate = 0.0; ///< 修正后覆盖率
+    int unreachable_gap_count = 0;       ///< 物理不可达的空隙数
+    double unreachable_area = 0.0;       ///< 物理不可达总面积 (m²)
 };
+
+// ── 空隙分类器 ──
+
+/// 单个未覆盖空隙的信息
+struct GapInfo {
+    std::vector<std::pair<double,double>> points;  ///< 空隙包含的网格点
+    double max_inscribed_width = 0.0;  ///< 最大内切宽度 (m)，即 2×max(点到障碍边界距离)
+    double area = 0.0;                 ///< 空隙面积 (m²)
+    bool is_unreachable = false;       ///< 宽度不足 robot_width → 物理不可达
+};
+
+/// 点到一组环的最近距离
+inline double pointToRingsDistance(
+    double px, double py,
+    const std::vector<f2c::types::LinearRing>& rings)
+{
+    double best = 1e30;
+    for (const auto& ring : rings) {
+        const size_t n = ring.size();
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            const double x1 = ring.getGeometry(j).getX();
+            const double y1 = ring.getGeometry(j).getY();
+            const double x2 = ring.getGeometry(i).getX();
+            const double y2 = ring.getGeometry(i).getY();
+            // 点到线段距离
+            const double dx = x2 - x1, dy = y2 - y1;
+            const double len2 = dx*dx + dy*dy;
+            double t = (len2 > 0.0)
+                ? std::max(0.0, std::min(1.0,
+                    ((px - x1) * dx + (py - y1) * dy) / len2))
+                : 0.0;
+            const double cx = x1 + t * dx;
+            const double cy = y1 + t * dy;
+            const double dist = std::sqrt((px - cx)*(px - cx) + (py - cy)*(py - cy));
+            if (dist < best) best = dist;
+        }
+    }
+    return best;
+}
+
+/// 对未覆盖网格点做连通分量 + 宽度分析，区分"算法可改进"和"物理不可达"
+/// robot_width: 机器人物理宽度，窄于此宽度的缝隙无法进入
+/// grid_resolution: 网格分辨率，用于连通分量邻接判定
+inline std::vector<GapInfo> classifyUncoveredGaps(
+    const std::vector<std::pair<double,double>>& uncovered_points,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    const f2c::types::LinearRing& outer_ring,
+    double robot_width,
+    double grid_resolution)
+{
+    std::vector<GapInfo> gaps;
+    if (uncovered_points.empty()) return gaps;
+
+    const size_t N = uncovered_points.size();
+    std::vector<bool> visited(N, false);
+    const double neighbor_dist = grid_resolution * 1.5;  // 邻接阈值
+
+    // 构建所有障碍环（孔洞 + 外环）
+    std::vector<f2c::types::LinearRing> obstacle_rings = hole_rings;
+    obstacle_rings.push_back(outer_ring);
+
+    for (size_t seed = 0; seed < N; ++seed) {
+        if (visited[seed]) continue;
+
+        // ── BFS 收集连通分量 ──
+        std::vector<size_t> component_idx;
+        std::vector<size_t> queue = {seed};
+        visited[seed] = true;
+        while (!queue.empty()) {
+            const size_t cur = queue.back();
+            queue.pop_back();
+            component_idx.push_back(cur);
+            for (size_t nb = 0; nb < N; ++nb) {
+                if (visited[nb]) continue;
+                const double dx = uncovered_points[cur].first - uncovered_points[nb].first;
+                const double dy = uncovered_points[cur].second - uncovered_points[nb].second;
+                if (std::sqrt(dx*dx + dy*dy) <= neighbor_dist) {
+                    visited[nb] = true;
+                    queue.push_back(nb);
+                }
+            }
+        }
+
+        // ── 计算该分量的最大内切宽度 ──
+        double max_radius = 0.0;
+        for (size_t idx : component_idx) {
+            const double px = uncovered_points[idx].first;
+            const double py = uncovered_points[idx].second;
+            const double dist = pointToRingsDistance(px, py, obstacle_rings);
+            if (dist > max_radius) max_radius = dist;
+        }
+        const double inscribed_width = 2.0 * max_radius;
+
+        // ── 填充 GapInfo ──
+        GapInfo gap;
+        gap.max_inscribed_width = inscribed_width;
+        gap.area = static_cast<double>(component_idx.size())
+                   * grid_resolution * grid_resolution;
+        gap.is_unreachable = (inscribed_width < robot_width);
+        gap.points.reserve(component_idx.size());
+        for (size_t idx : component_idx) {
+            gap.points.push_back(uncovered_points[idx]);
+        }
+        gaps.push_back(std::move(gap));
+    }
+    return gaps;
+}
 
 namespace coverage_scoring {
 
@@ -550,6 +664,40 @@ inline EvalResult evaluatePlan(
     }
     r.coverage_pass = (r.coverage_rate >= params.coverage_threshold);
 
+    // ── 空隙分类：区分物理不可达 vs 算法可改进 ──
+    r.corrected_net_area = r.net_area;
+    r.corrected_coverage_rate = r.coverage_rate;
+    if (params.use_grid_method && !r.uncovered_grid.empty() && r.net_area > 0.0) {
+        f2c::types::LinearRing outer_ring;
+        if (target_cells.size() > 0) {
+            outer_ring = target_cells.getGeometry(0).getExteriorRing();
+        }
+        auto gaps = classifyUncoveredGaps(
+            r.uncovered_grid, hole_rings, outer_ring,
+            params.robot_width, params.grid_resolution);
+
+        r.unreachable_gap_count = 0;
+        r.unreachable_area = 0.0;
+        size_t unreachable_grid_count = 0;
+        for (const auto& gap : gaps) {
+            if (gap.is_unreachable) {
+                ++r.unreachable_gap_count;
+                r.unreachable_area += gap.area;
+                unreachable_grid_count += gap.points.size();
+            }
+        }
+        if (unreachable_grid_count > 0) {
+            // 网格一致算法：使用网格计数而非 F2C 多边形面积，避免离散化误差
+            size_t total_grid_target = r.covered_grid.size() + r.uncovered_grid.size();
+            size_t corrected_target = total_grid_target - unreachable_grid_count;
+            if (corrected_target > 0) {
+                r.corrected_coverage_rate = std::min(1.0,
+                    static_cast<double>(r.covered_grid.size()) / static_cast<double>(corrected_target));
+                r.corrected_net_area = r.net_area - r.unreachable_area;
+            }
+        }
+    }
+
     // ── 路径总长 ──
     r.total_distance = computeTotalDistance(path);
 
@@ -586,8 +734,9 @@ inline EvalResult evaluatePlan(
 
     // ── 综合评分 ──
     // CoverageGate：90% 为零，达到 coverage_threshold 时才满分。
+    // 使用修正后的覆盖率（已扣除物理不可达空隙），无空隙时等价于原始覆盖率。
     r.coverage_gate = coverage_scoring::coverageGate(
-        r.coverage_rate, params.coverage_threshold);
+        r.corrected_coverage_rate, params.coverage_threshold);
 
     // 路径长度得分：理想路径 = 面积 / 有效间距（全覆盖所需最短swath总长）
     double ideal_dist = r.net_area / std::max(0.01, effective_width);
@@ -664,6 +813,11 @@ inline std::string formatEvalReport(const EvalResult& r, const char* scenario_na
     oss << "\u5df2\u8986\u76d6\u9762\u79ef: " << r.covered_area << " m\u00b2\n";
     oss << std::setprecision(2) << "\u8986\u76d6\u7387: " << (r.coverage_rate*100) << "%  "
         << (r.coverage_pass ? "[\u901a\u8fc7]" : "[\u4e0d\u5408\u683c]") << "\n";
+    if (r.unreachable_gap_count > 0) {
+        oss << "  (\u7269\u7406\u4e0d\u53ef\u8fbe\u7a7a\u9699: " << r.unreachable_gap_count << " \u5904, "
+            << std::setprecision(3) << r.unreachable_area << " m\u00b2 \u5df2\u4ece\u5206\u6bcd\u6263\u9664)\n";
+        oss << std::setprecision(2) << "\u4fee\u6b63\u540e\u8986\u76d6\u7387: " << (r.corrected_coverage_rate*100) << "%\n";
+    }
     oss << std::setprecision(3) << "\u672a\u8986\u76d6\u9762\u79ef: "
         << (r.net_area*(1-r.coverage_rate)) << " m\u00b2\n";
     oss << "\n--- \u7b2c\u4e8c\u5c42: \u6548\u7387\u6307\u6807 ---\n";
