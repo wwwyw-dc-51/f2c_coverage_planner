@@ -151,7 +151,7 @@ def _estimated_retrace_length(
     return duplicate_length
 
 
-def audit_report(report, polygon, robot_width=0.95):
+def audit_report(report, polygon, robot_width=0.75, merge_distance=0.75):
     """检查单场景报告，返回按严重程度分类的发现。"""
     findings = []
     path_points = _path_points(report.get("path", []))
@@ -169,7 +169,8 @@ def audit_report(report, polygon, robot_width=0.95):
         ))
     reported_turns = report.get("eval", {}).get("turn_count")
     if reported_turns is not None:
-        geometry_turns = _geometry_turn_count(report.get("path", []))
+        geometry_turns = _geometry_turn_count(
+            report.get("path", []), merge_distance=merge_distance)
         if int(reported_turns) != geometry_turns:
             findings.append(Finding(
                 code="TURN_COUNT_MISMATCH",
@@ -292,7 +293,7 @@ def _find_polygon_file(repo_root, scenario):
     return None
 
 
-def audit_batch(batch_dir, repo_root, robot_width=0.95):
+def audit_batch(batch_dir, repo_root, robot_width=0.75, merge_distance=0.75):
     results = []
     report_paths = list(Path(batch_dir).glob("*_data.json"))
     report_paths.sort(key=lambda path: (
@@ -314,7 +315,12 @@ def audit_batch(batch_dir, repo_root, robot_width=0.95):
             try:
                 report = json.loads(report_path.read_text(encoding="utf-8"))
                 polygon = load_polygon_yaml(polygon_path)
-                findings = audit_report(report, polygon, robot_width=robot_width)
+                findings = audit_report(
+                    report,
+                    polygon,
+                    robot_width=robot_width,
+                    merge_distance=merge_distance,
+                )
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 findings = [Finding(
                     code="REPORT_READ_ERROR",
@@ -358,11 +364,22 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="审计 F2C 批量测试 JSON 报告")
     parser.add_argument("batch_dir", help="包含 *_data.json 的批次目录")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
-    parser.add_argument("--robot-width", type=float, default=0.95)
+    parser.add_argument("--robot-width", type=float, default=0.75)
+    parser.add_argument(
+        "--merge-distance",
+        type=float,
+        default=0.75,
+        help="相邻方向变化归并为同一转弯的最小路径距离（米）",
+    )
     parser.add_argument("--markdown", help="可选的 Markdown 输出路径")
     args = parser.parse_args(argv)
 
-    results = audit_batch(args.batch_dir, args.repo_root, args.robot_width)
+    results = audit_batch(
+        args.batch_dir,
+        args.repo_root,
+        robot_width=args.robot_width,
+        merge_distance=args.merge_distance,
+    )
     markdown = format_markdown(args.batch_dir, results)
     print(markdown)
     if args.markdown:

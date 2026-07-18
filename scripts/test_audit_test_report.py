@@ -100,6 +100,37 @@ class AuditReportTest(unittest.TestCase):
 
         self.assertIn("FOOTPRINT_CLEARANCE", {finding.code for finding in findings})
 
+    def test_default_robot_width_matches_planner_baseline(self):
+        report = {
+            "path": [{"x": 1.0, "y": 0.4}, {"x": 9.0, "y": 0.4}],
+            "swaths": [{"points": [{"x": 1.0, "y": 0.4}, {"x": 9.0, "y": 0.4}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertNotIn("FOOTPRINT_CLEARANCE", {finding.code for finding in findings})
+
+    def test_turn_merge_distance_is_configurable(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 1.0},
+                {"x": 2.0, "y": 1.0},
+                {"x": 2.0, "y": 1.6},
+                {"x": 3.0, "y": 1.6},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}]}],
+            "eval": {"turn_count": 1},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        merged_findings = audit_report(report, polygon, merge_distance=1.0)
+        split_findings = audit_report(report, polygon, merge_distance=0.5)
+
+        self.assertNotIn("TURN_COUNT_MISMATCH", {finding.code for finding in merged_findings})
+        self.assertIn("TURN_COUNT_MISMATCH", {finding.code for finding in split_findings})
+
     def test_reports_excessive_sub_centimeter_segments(self):
         report = {
             "path": [
