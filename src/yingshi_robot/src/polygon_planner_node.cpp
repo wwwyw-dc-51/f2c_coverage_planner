@@ -1782,26 +1782,45 @@ private:
         }
         if (all_swaths.size() > 0) json << "\n  ";
         json << "],\n  \"cells\": [";
-        for (std::size_t component_index = 0;
-             component_index < result.component_plans.size();
-             ++component_index) {
-            if (component_index > 0) json << ",";
-            const auto& component = result.component_plans[component_index];
-            const auto& ring =
-                component.planning_polygon.getExteriorRing();
-            json << "\n    {\"id\":" << component_index
-                 << ",\"boundary\":[";
-            for (std::size_t point = 0; point < ring.size(); ++point) {
-                if (point > 0) json << ",";
-                json << "[" << ring.getGeometry(point).getX()
-                     << "," << ring.getGeometry(point).getY() << "]";
+        // 使用各 component 的 decomposition_cells（真实分解 cell）
+        // 而非 planning_polygon（C-space 收缩后外边界，只反映分量轮廓）
+        {
+            std::size_t global_cell_id = 0;
+            for (std::size_t comp_idx = 0;
+                 comp_idx < result.component_plans.size(); ++comp_idx) {
+                const auto& comp = result.component_plans[comp_idx];
+                const auto& dc = comp.decomposition_cells;
+                const auto& swaths_by_cells = comp.cells_with_swaths;
+                for (std::size_t ci = 0; ci < dc.size(); ++ci) {
+                    if (global_cell_id > 0) json << ",";
+                    const auto& ring = dc.getGeometry(ci).getExteriorRing();
+                    json << "\n    {\"id\":" << global_cell_id
+                         << ",\"boundary\":[";
+                    for (std::size_t point = 0; point < ring.size(); ++point) {
+                        if (point > 0) json << ",";
+                        json << "[" << ring.getGeometry(point).getX()
+                             << "," << ring.getGeometry(point).getY() << "]";
+                    }
+                    std::size_t cell_swath_count = 0;
+                    if (ci < swaths_by_cells.size()) {
+                        cell_swath_count = swaths_by_cells.at(ci).size();
+                    }
+                    json << "],\"swath_count\":" << cell_swath_count
+                         << ",\"area\":" << dc.getGeometry(ci).area() << "}";
+                    ++global_cell_id;
+                }
             }
-            json << "],\"swath_count\":" << component.total_swaths
-                 << ",\"area\":"
-                 << component.planning_polygon.area() << "}";
         }
         if (!result.component_plans.empty()) json << "\n  ";
-        json << "],\n  \"connections\": [],\n  \"cspace\": {"
+        json << "],\n  \"connections\": [";
+        // 从 route 的连接信息生成 cell 间连接
+        for (std::size_t conn = 0; conn < result.total_connections; ++conn) {
+            if (conn > 0) json << ",";
+            json << "\n    {\"from_cell\":" << conn
+                 << ",\"to_cell\":" << (conn + 1) << "}";
+        }
+        if (result.total_connections > 0) json << "\n  ";
+        json << "],\n  \"cspace\": {"
              << "\"valid\":"
              << (result.traversability.analysis_valid ? "true" : "false")
              << ",\"original_area\":"
