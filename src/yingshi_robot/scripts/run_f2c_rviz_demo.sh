@@ -82,15 +82,16 @@ print(data.get('boundary_type', 'closed'))
 echo "Boundary type from YAML: ${BOUNDARY_TYPE}"
 
 ros2 run yingshi_robot polygon_planner_node --ros-args \
-  -p robot_width:=0.95 \
-  -p min_turning_radius:=0.1 \
+  -p use_planner_core:=true \
+  -p robot_width:=0.75 \
+  -p min_turning_radius:=0.01 \
   -p max_diff_curv:=0.3 \
-  -p coverage_width:=0.45 \
-  -p mid_hl_width_ratio:=0.25 \
+  -p coverage_width:=0.90 \
+  -p mid_hl_width_ratio:=0.20 \
   -p no_hl_width_ratio:=0.0 \
   -p min_hole_area:=1.0 \
   -p decomposition_angle:=0.0 \
-  -p swath_endpoint_shrink_distance:=0.25 \
+  -p swath_endpoint_shrink_distance:=0.03 \
   -p min_swath_length:=0.5 \
   -p boundary_type:="${BOUNDARY_TYPE}" &
 PLANNER_PID=$!

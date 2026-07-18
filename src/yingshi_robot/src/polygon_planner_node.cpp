@@ -73,7 +73,7 @@ private:
     bool eval_use_grid_method_;
     double eval_coverage_threshold_;
     std::string output_dir_;
-    bool use_planner_core_;            // 是否使用 PlannerCore（P2 迁移开关）
+    bool use_planner_core_;            // true=生产 PlannerCore；false=legacy 回归
 
     // ── 优化开关参数 ──
     bool use_optimized_planner_;       // ★ 总开关：true=优化版 false=原版
@@ -87,7 +87,6 @@ private:
     double path_simplify_turn_threshold_; // RDP 转弯检测角度阈值 (rad)
     double swath_overlap_ratio_;       // Swath 重叠率 (0~1)，0=刚好接上，0.03=3%重叠防漏缝
     bool ortools_exact_solve_;         // OR-Tools 求解器详细日志（genRoute show_log=true）
-    bool decomposition_angle_optimization_; // 分解角度多角度选择
     bool decomposition_enabled_;       // 是否启用 Boustrophedon 分解（关=W1不分解）
     bool use_sweep_decomp_;           // ★ 扫描线分解：仅水平切分，孔洞→条带(7cells)而非网格(42cells)
     double merge_angle_threshold_;    // cell 合并角度阈值（度），默认45°
@@ -103,45 +102,44 @@ public:
     : Node("polygon_planner_node")
     {
         // 声明参数，设置默认值
-        this->declare_parameter("robot_width", 1.0);
+        this->declare_parameter("robot_width", 0.75);
         this->declare_parameter("min_turning_radius", 0.01);  // 差速驱动近似原地转
-        this->declare_parameter("max_diff_curv", 0.1);
-        this->declare_parameter("coverage_width", 1.0);
+        this->declare_parameter("max_diff_curv", 0.3);
+        this->declare_parameter("coverage_width", 0.90);
         this->declare_parameter("path_resolution", 0.1);  // 添加路径分辨率参数
         this->declare_parameter("decomposition_angle", 0.0);  // Boustrophedon 分解角度（弧度），默认0度（沿X轴方向）
-        this->declare_parameter("mid_hl_width_ratio", 0.1);  // mid_hl 宽度比例（相对于覆盖宽度）
-        this->declare_parameter("no_hl_width_ratio", 0.5);   // no_hl 宽度比例（相对于覆盖宽度）
-        this->declare_parameter("min_hole_area", 0.1);       // 最小 holes 面积阈值（平方米），小于此面积的 holes 将被剔除
+        this->declare_parameter("mid_hl_width_ratio", 0.20);  // mid_hl 宽度比例（相对于覆盖宽度）
+        this->declare_parameter("no_hl_width_ratio", 0.0);   // no_hl 宽度比例（相对于覆盖宽度）
+        this->declare_parameter("min_hole_area", 1.0);       // v9.7 验收基线；C-space 前处理会另行报告不可达小地块
         this->declare_parameter("swath_endpoint_shrink_distance", 0.03);  // 条带端点向中心收缩的距离（米），batch 实测最优值
 
         // 获取参数值并存储
-        this->declare_parameter("min_swath_length", 0.2);
+        this->declare_parameter("min_swath_length", 0.5);
 
         // ── 评估参数 ──
         this->declare_parameter("eval_enable_report", true);
         this->declare_parameter("eval_grid_resolution", 0.1);
-        this->declare_parameter("eval_use_grid_method", false);
+        this->declare_parameter("eval_use_grid_method", true);
         this->declare_parameter("eval_coverage_threshold", 0.99);
         this->declare_parameter(
             "output_dir", yingshi::defaultArtifactDirectory());
-        this->declare_parameter("use_planner_core", false);  // P2 迁移开关：true=PlannerCore管线
+        this->declare_parameter("use_planner_core", true);  // 默认生产管线；false 仅用于 legacy 回归
 
         // ── 优化参数 ──
-        this->declare_parameter("use_optimized_planner", false);
-        this->declare_parameter("swath_angle_optimization", false);
+        this->declare_parameter("use_optimized_planner", true);
+        this->declare_parameter("swath_angle_optimization", true);
         this->declare_parameter("swath_angle_candidates", "");  // 留空=自动提取多边形边缘角度
-        this->declare_parameter("filter_tiny_cells", false);
+        this->declare_parameter("filter_tiny_cells", true);
         this->declare_parameter("min_cell_area_ratio", 2.0);
-        this->declare_parameter("path_simplify_enabled", false);
+        this->declare_parameter("path_simplify_enabled", true);
         this->declare_parameter("path_simplify_tolerance", 0.05);
         this->declare_parameter("path_simplify_turn_threshold", 0.15);  // 转弯检测角度阈值 (rad)，~8.6°
-        this->declare_parameter("swath_overlap_ratio", 0.0);  // Swath 重叠率 (0~1)，0.03=3%重叠
+        this->declare_parameter("swath_overlap_ratio", 0.03);  // Swath 重叠率 (0~1)，0.03=3%重叠
         this->declare_parameter("ortools_exact_solve", false);  // 启用 OR-Tools 求解器详细日志输出
-        this->declare_parameter("decomposition_angle_optimization", false);
         this->declare_parameter("decomposition_enabled", true);  // Boustrophedon 分解开关
-        this->declare_parameter("use_sweep_decomp", false);     // ★ 扫描线分解：仅水平切孔洞顶点→全宽条带
-        this->declare_parameter("merge_angle_threshold", 45.0); // cell 合并角度阈值（度），无sweep默认45°
-        this->declare_parameter("swath_order_type", "none");     // swath 排序: boustrophedon | snake | spiral | none
+        this->declare_parameter("use_sweep_decomp", true);     // 扫描线分解：仅水平切孔洞顶点→全宽条带
+        this->declare_parameter("merge_angle_threshold", 60.0); // cell 合并角度阈值（度）
+        this->declare_parameter("swath_order_type", "boustrophedon");
         this->declare_parameter("turn_planner_type", "direct");  // "direct"/"dubins"/"reeds_shepp"，差速驱动默认零半径欧氏连接
 
         // ── 边界覆盖策略参数 ──
@@ -150,8 +148,8 @@ public:
         //                "custom"=手动指定 boundary_coverage_margin
         this->declare_parameter("boundary_type", "closed");
         // boundary_coverage_margin: swath端点调整量（米）
-        //   正值 = 向外延伸（开放边界，牺牲重叠换覆盖率）
-        //   负值 = 向内收缩（闭合边界，留安全距离防撞墙）
+        //   正值 = 向内收缩（闭合边界，留安全距离防撞墙）
+        //   负值 = 向外延伸（开放边界，牺牲重叠换覆盖率）
         //   零值 = 不做调整（swath端点即为cell边界）
         this->declare_parameter("boundary_coverage_margin", -0.3);
         this->declare_parameter("boundary_open_default_margin", -0.3);  // open 边界默认延伸量 (m)，负值=向外延伸
@@ -239,7 +237,6 @@ public:
         RCLCPP_INFO(this->get_logger(), "swath_overlap_ratio: %.1f%%",
                     swath_overlap_ratio_ * 100.0);
         RCLCPP_INFO(this->get_logger(), "ortools_exact_solve (verbose log): %s", ortools_exact_solve_ ? "true" : "false");
-        RCLCPP_INFO(this->get_logger(), "decomposition_angle_optimization: %s", decomposition_angle_optimization_ ? "true" : "false");
         RCLCPP_INFO(this->get_logger(), "decomposition_enabled: %s", decomposition_enabled_ ? "true" : "false");
         RCLCPP_INFO(this->get_logger(), "use_sweep_decomp: %s", use_sweep_decomp_ ? "true (horizontal strips)" : "false (grid)");
         RCLCPP_INFO(this->get_logger(), "turn_planner_type: %s", turn_planner_type_.c_str());
@@ -247,8 +244,8 @@ public:
         RCLCPP_INFO(this->get_logger(), "boundary_type: %s", boundary_type_.c_str());
         RCLCPP_INFO(this->get_logger(), "boundary_coverage_margin: %.3f m (%s)",
                     boundary_coverage_margin_,
-                    boundary_coverage_margin_ > 0.0 ? "extend outward (open)" :
-                    boundary_coverage_margin_ < 0.0 ? "shrink inward (closed)" : "no adjustment");
+                    boundary_coverage_margin_ > 0.0 ? "shrink inward (closed)" :
+                    boundary_coverage_margin_ < 0.0 ? "extend outward (open)" : "no adjustment");
         RCLCPP_INFO(this->get_logger(), "boundary_open_default_margin: %.3f m", boundary_open_default_margin_);
         RCLCPP_INFO(this->get_logger(), "---------------------------------");
 
@@ -416,7 +413,6 @@ private:
         double path_simplify_turn_threshold;
         double swath_overlap_ratio;
         bool ortools_exact_solve;
-        bool decomposition_angle_optimization;
         bool decomposition_enabled;
         bool use_sweep_decomp;
         double merge_angle_threshold;
@@ -445,8 +441,6 @@ private:
         config.swath.endpoint_shrink =
             state.swath_endpoint_shrink_distance;
         config.swath.angle_candidates = state.swath_angle_candidates;
-        config.swath.decomposition_angle_opt =
-            state.decomposition_angle_optimization;
 
         config.fill.coverage_width = state.coverage_width;
         config.fill.boundary_type = state.boundary_type;
@@ -561,8 +555,6 @@ private:
             get_double("path_simplify_turn_threshold");
         state.swath_overlap_ratio = get_double("swath_overlap_ratio");
         state.ortools_exact_solve = get_bool("ortools_exact_solve");
-        state.decomposition_angle_optimization =
-            get_bool("decomposition_angle_optimization");
         state.decomposition_enabled = get_bool("decomposition_enabled");
         state.use_sweep_decomp = get_bool("use_sweep_decomp");
         state.merge_angle_threshold = get_double("merge_angle_threshold");
@@ -610,8 +602,6 @@ private:
             state.path_simplify_turn_threshold;
         swath_overlap_ratio_ = state.swath_overlap_ratio;
         ortools_exact_solve_ = state.ortools_exact_solve;
-        decomposition_angle_optimization_ =
-            state.decomposition_angle_optimization;
         decomposition_enabled_ = state.decomposition_enabled;
         use_sweep_decomp_ = state.use_sweep_decomp;
         merge_angle_threshold_ = state.merge_angle_threshold;
@@ -651,8 +641,6 @@ private:
                 path_simplify_turn_threshold_ &&
             state.swath_overlap_ratio == swath_overlap_ratio_ &&
             state.ortools_exact_solve == ortools_exact_solve_ &&
-            state.decomposition_angle_optimization ==
-                decomposition_angle_optimization_ &&
             state.decomposition_enabled == decomposition_enabled_ &&
             state.use_sweep_decomp == use_sweep_decomp_ &&
             state.merge_angle_threshold == merge_angle_threshold_ &&
@@ -1747,7 +1735,6 @@ private:
         // 分解参数
         req.decomposition_enabled = decomposition_enabled_;
         req.use_sweep_decomp = use_sweep_decomp_;
-        req.decomposition_angle_optimization = decomposition_angle_optimization_;
         req.merge_angle_threshold = merge_angle_threshold_;
 
         // Swath 优化
@@ -1764,7 +1751,6 @@ private:
         // 过滤
         req.filter_tiny_cells = filter_tiny_cells_;
         req.min_cell_area_ratio = min_cell_area_ratio_;
-        req.min_hole_area = min_hole_area_;
 
         // 边界策略
         req.boundary_type = boundary_type_;
@@ -3019,17 +3005,9 @@ private:
             //   "closed" → 内缩（安全距离，防撞墙）
             //   "open"   → 外伸（侵入headland，换覆盖率）
             //   "custom" → 使用用户指定的 boundary_coverage_margin
-            double effective_margin = boundary_coverage_margin_;
-            if (boundary_type_ == "closed") {
-                // 闭合硬边界：使用 swath_endpoint_shrink_distance 的传统安全值
-                effective_margin = swath_endpoint_shrink_distance_;
-                if (effective_margin <= 0.0) effective_margin = 0.3;  // 保底值
-            } else if (boundary_type_ == "open") {
-                // 开放软边界：向外延伸，值为负（adjustSwathEndpoints 负值=延伸）
-                effective_margin = boundary_coverage_margin_;
-                if (effective_margin >= 0.0) effective_margin = boundary_open_default_margin_;  // 保底值（ROS 参数可调）
-            }
-            // "custom": 直接使用 boundary_coverage_margin_，不做改写
+            const double effective_margin = yingshi::resolveBoundaryMargin(
+                boundary_type_, swath_endpoint_shrink_distance_,
+                boundary_coverage_margin_, boundary_open_default_margin_);
 
             if (effective_margin != 0.0) {
                 const char* direction = effective_margin > 0.0 ? "shrink inward (closed boundary safety)" :

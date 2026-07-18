@@ -228,9 +228,11 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
 
         // ── 9. 边界策略：闭合边界收缩端点 / 开放边界延伸 ──
         {
-            double margin = (req.boundary_type == "closed")
-                ? req.swath_endpoint_shrink_distance
-                : req.boundary_coverage_margin;
+            const double margin = resolveBoundaryMargin(
+                req.boundary_type,
+                req.swath_endpoint_shrink_distance,
+                req.boundary_coverage_margin,
+                req.boundary_open_default_margin);
             if (std::abs(margin) > 1e-9) {
                 const auto& outer = req.polygon.getExteriorRing();
                 std::vector<f2c::types::LinearRing> hr;

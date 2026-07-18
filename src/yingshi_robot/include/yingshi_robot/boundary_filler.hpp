@@ -72,6 +72,13 @@ bool segmentCrossesHole(double x0, double y0, double x1, double y1,
                         int num_samples = 10);
 
 // ========== 边界策略：对 Route 中全部 swath 应用边界缩进/延伸 ==========
+// 将边界预设解析为实际端点调整量，供所有规划管线共享。
+double resolveBoundaryMargin(
+    const std::string& boundary_type,
+    double endpoint_shrink,
+    double boundary_coverage_margin,
+    double open_default_margin);
+
 // 根据 boundary_type 决定 margin：
 //   "closed" → 使用 shrink_margin（正值=向内收缩）
 //   "open"   → 使用 boundary_coverage_margin（负值=向外延伸）

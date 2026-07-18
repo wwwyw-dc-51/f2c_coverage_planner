@@ -175,6 +175,25 @@ TEST(BoundaryEndpointAdjustment, DoesNotLetHoleProximityAtMidpointShrinkSafeEndp
     EXPECT_NEAR(adjusted.endPoint().getX(), 0.15, 1e-9);
 }
 
+TEST(BoundaryPolicy, ResolvesClosedOpenAndCustomMarginsConsistently)
+{
+    EXPECT_DOUBLE_EQ(
+        yingshi::resolveBoundaryMargin("closed", 0.03, -0.2, -0.4),
+        0.03);
+    EXPECT_DOUBLE_EQ(
+        yingshi::resolveBoundaryMargin("closed", 0.0, -0.2, -0.4),
+        0.3);
+    EXPECT_DOUBLE_EQ(
+        yingshi::resolveBoundaryMargin("open", 0.03, 0.0, -0.4),
+        -0.4);
+    EXPECT_DOUBLE_EQ(
+        yingshi::resolveBoundaryMargin("open", 0.03, -0.2, -0.4),
+        -0.2);
+    EXPECT_DOUBLE_EQ(
+        yingshi::resolveBoundaryMargin("custom", 0.03, 0.12, -0.4),
+        0.12);
+}
+
 TEST(BoundaryEndpointAdjustment, ShrinksOnlyTheEndpointThatIsNearAHole)
 {
     const auto outer = makeRectangle(0.0, 0.0, 25.0, 25.0);

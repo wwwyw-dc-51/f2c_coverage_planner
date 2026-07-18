@@ -13,18 +13,17 @@ struct DecomposerParams {
 
 // ========== Swath 生成参数 ==========
 struct SwathParams {
-    double coverage_width         = 0.45;
+    double coverage_width         = 0.90;
     double swath_overlap_ratio    = 0.03;  // 0~1，3% 重叠防漏缝
     bool   angle_optimization     = true;  // 多角度选择
     double min_swath_length       = 0.5;   // 短于此时丢弃
     double endpoint_shrink        = 0.03;  // 闭合边界向内收缩
     std::string angle_candidates;          // 补充候选角度，留空=自动提取
-    bool   decomposition_angle_opt = false;
 };
 
 // ========== 边界补刀参数 ==========
 struct FillParams {
-    double coverage_width  = 0.45;
+    double coverage_width  = 0.90;
     std::string boundary_type = "closed";  // "closed"/"open"/"custom"
     double boundary_margin = -0.3;         // 正=收缩，负=延伸
     double open_default_margin = -0.3;     // open 模式默认延伸量
@@ -40,8 +39,8 @@ struct PathParams {
     bool   ortools_exact_solve    = false;       // OR-Tools 详细日志
     double max_diff_curv          = 0.3;
     double min_turning_radius     = 0.01;
-    double robot_width            = 0.95;
-    double coverage_width         = 0.45;
+    double robot_width            = 0.75;
+    double coverage_width         = 0.90;
     double path_resolution        = 0.1;
     double swath_overlap_ratio    = 0.03;
     // 边界策略（传递给 swath 端点调整）

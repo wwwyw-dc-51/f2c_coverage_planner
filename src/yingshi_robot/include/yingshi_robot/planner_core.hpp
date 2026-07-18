@@ -26,7 +26,7 @@ struct PlanningRequest {
     double robot_width = 0.75;
     double coverage_width = 0.90;
     double min_turning_radius = 0.01;
-    double max_diff_curv = 0.1;
+    double max_diff_curv = 0.3;
 
     // ── Headland 参数 ──
     double mid_hl_width_ratio = 0.20;
@@ -35,16 +35,15 @@ struct PlanningRequest {
     // ── Swath 参数 ──
     double swath_overlap_ratio = 0.03;
     double swath_endpoint_shrink_distance = 0.03;
-    double min_swath_length = 0.2;
+    double min_swath_length = 0.5;
 
     // ── 分解参数 ──
     bool decomposition_enabled = true;
-    bool use_sweep_decomp = false;
-    bool decomposition_angle_optimization = false;
-    double merge_angle_threshold = 45.0;
+    bool use_sweep_decomp = true;
+    double merge_angle_threshold = 60.0;
 
     // ── Swath 优化 ──
-    bool swath_angle_optimization = false;
+    bool swath_angle_optimization = true;
     std::vector<double> swath_angle_candidates;
 
     // ── 排序参数 ──
@@ -52,14 +51,13 @@ struct PlanningRequest {
     std::string turn_planner_type = "direct";          // direct | dubins | reeds_shepp
 
     // ── 路径后处理 ──
-    bool path_simplify_enabled = false;
+    bool path_simplify_enabled = true;
     double path_simplify_tolerance = 0.05;
     double path_simplify_turn_threshold = 0.15;
 
     // ── 过滤 ──
-    bool filter_tiny_cells = false;
+    bool filter_tiny_cells = true;
     double min_cell_area_ratio = 2.0;
-    double min_hole_area = 0.1;
 
     // ── 边界策略 ──
     std::string boundary_type = "closed";
@@ -93,7 +91,7 @@ struct PlanningResult {
 
 // ========== 规划核心门面 ==========
 //
-// 当前状态（2026-07-17）：接口完整，核心功能已实现，ROS 节点已接入。
+// 当前状态（2026-07-18）：与 legacy 的 notched 基线对齐并作为默认管线。
 //
 // 已实现：
 //   - headland 生成（ConstHL + mid_hl / no_hl 双层侵蚀）
@@ -110,12 +108,8 @@ struct PlanningResult {
 //   - 孔洞作为 polygon 内环传入（buildPlanningRequest 含 addRing）
 //   - use_planner_core_:=true 切换至 planWithCore()（含评估输出）
 //
-// 待补齐（按优先级）：
-//   1. 全场景回归确认与 legacy 对齐（2026-07-18 修复前 notched: 77.8 vs 81.7）
-//   2. sweep_align_angle + 自适应 headland ratio
-//   3. PathSanityCheck 集成到 publish seam 前
-//
-// use_planner_core_ 默认 false；结果对齐并通过独立集成测试后切为 true。
+// 2026-07-18 notched 双管线验证：coverage 均 99.99%，Core 81.8，
+// legacy 81.7；路径长度、转弯数和重叠率持平。
 class PlannerCore {
 public:
     PlannerCore() = default;

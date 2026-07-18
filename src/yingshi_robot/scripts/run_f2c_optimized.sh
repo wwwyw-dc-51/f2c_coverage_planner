@@ -132,8 +132,9 @@ DIAG_FILE="${DIAG_DIR}/diag_$(date +%m%d_%H%M%S).log"
 echo "Diagnostic log: ${DIAG_FILE}"
 
 ros2 run yingshi_robot polygon_planner_node --ros-args \
-  -p robot_width:=0.95 \
-  -p coverage_width:=0.45 \
+  -p use_planner_core:=true \
+  -p robot_width:=0.75 \
+  -p coverage_width:=0.90 \
   -p mid_hl_width_ratio:=0.20 \
   -p no_hl_width_ratio:=0.0 \
   -p min_hole_area:=1.0 \
@@ -145,7 +146,6 @@ ros2 run yingshi_robot polygon_planner_node --ros-args \
   -p boundary_type:="${BOUNDARY_TYPE}" \
   -p use_optimized_planner:=true \
   -p swath_angle_optimization:=true \
-  -p decomposition_angle_optimization:=false \
   -p decomposition_enabled:=true \
   -p filter_tiny_cells:=true \
   -p path_simplify_enabled:=true \

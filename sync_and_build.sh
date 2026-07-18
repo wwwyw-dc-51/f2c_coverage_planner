@@ -78,7 +78,8 @@ if [[ "$MODE" == "--test" ]]; then
         export LD_LIBRARY_PATH=${WS}/install/fields2cover/lib:${WS}/install/lib:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
         LOG=/tmp/f2c_test_\$(date +%H%M%S).log && \
         ros2 run yingshi_robot polygon_planner_node --ros-args \
-          -p robot_width:=0.95 -p coverage_width:=0.45 \
+          -p use_planner_core:=true \
+          -p robot_width:=0.75 -p coverage_width:=0.90 \
           -p mid_hl_width_ratio:=0.20 -p no_hl_width_ratio:=0.0 \
           -p use_sweep_decomp:=true -p merge_angle_threshold:=60.0 \
           -p swath_order_type:=boustrophedon \

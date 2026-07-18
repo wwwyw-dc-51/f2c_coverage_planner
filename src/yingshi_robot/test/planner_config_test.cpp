@@ -92,6 +92,20 @@ TEST(PlannerConfig, RejectsConflictingCopiesOfSharedPhysicalParameters)
     EXPECT_TRUE(hasIssueFor(issues, "coverage_width"));
 }
 
+TEST(PlannerConfig, RejectsOpenBoundaryFallbackThatShrinksInward)
+{
+    yingshi::PlannerConfig config;
+    config.fill.boundary_type = "open";
+    config.path.boundary_type = "open";
+    config.fill.boundary_margin = 0.0;
+    config.path.boundary_margin = 0.0;
+    config.fill.open_default_margin = 0.2;
+
+    const auto issues = yingshi::validatePlannerConfig(config);
+
+    EXPECT_TRUE(hasIssueFor(issues, "fill.open_default_margin"));
+}
+
 TEST(PlannerConfig, RejectsUnsupportedStrategyNames)
 {
     yingshi::PlannerConfig config;

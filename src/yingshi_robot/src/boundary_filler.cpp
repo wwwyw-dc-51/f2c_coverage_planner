@@ -1254,6 +1254,23 @@ size_t pruneRedundantCellSeamFills(
 // ========== 边界策略：对 Route 中全部 swath 应用边界缩进/延伸 ==========
 // 从 ROS 节点 planCoveragePath 提取。对每个 swath 端点独立判断
 // 外环/孔洞净空后调整，确保边界策略一致。
+double resolveBoundaryMargin(
+    const std::string& boundary_type,
+    double endpoint_shrink,
+    double boundary_coverage_margin,
+    double open_default_margin)
+{
+    if (boundary_type == "closed") {
+        return endpoint_shrink > 0.0 ? endpoint_shrink : 0.3;
+    }
+    if (boundary_type == "open") {
+        return boundary_coverage_margin < 0.0
+            ? boundary_coverage_margin
+            : open_default_margin;
+    }
+    return boundary_coverage_margin;
+}
+
 size_t applyBoundaryMarginToRoute(
     f2c::types::Route& route,
     const f2c::types::LinearRing& outer_ring,

@@ -12,7 +12,7 @@ struct PlannerRuntimeParams {
     double decomposition_angle = 0.0;
     double mid_hl_width_ratio = 0.2;
     double no_hl_width_ratio = 0.0;
-    double min_hole_area = 0.1;
+    double min_hole_area = 1.0;
     double eval_grid_resolution = 0.1;
     double eval_coverage_threshold = 0.99;
 };

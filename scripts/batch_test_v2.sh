@@ -27,6 +27,7 @@ declare -A SCENARIOS=(
 )
 
 PLANNER_PARAMS=(
+    -p use_planner_core:=true
     -p robot_width:=0.75
     -p coverage_width:=0.90
     -p mid_hl_width_ratio:=0.20
@@ -40,7 +41,6 @@ PLANNER_PARAMS=(
     -p boundary_type:=closed
     -p use_optimized_planner:=true
     -p swath_angle_optimization:=true
-    -p decomposition_angle_optimization:=false
     -p decomposition_enabled:=true
     -p filter_tiny_cells:=true
     -p use_sweep_decomp:=true

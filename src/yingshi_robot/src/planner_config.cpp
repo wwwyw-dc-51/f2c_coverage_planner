@@ -154,6 +154,16 @@ std::vector<PlannerConfigIssue> validatePlannerConfig(
         issues, "fill.boundary_margin", config.fill.boundary_margin);
     requireFinite(
         issues, "fill.open_default_margin", config.fill.open_default_margin);
+    if (config.fill.boundary_type == "open" &&
+        std::isfinite(config.fill.boundary_margin) &&
+        config.fill.boundary_margin >= 0.0 &&
+        (!std::isfinite(config.fill.open_default_margin) ||
+         config.fill.open_default_margin >= 0.0)) {
+        addIssue(
+            issues, PlannerConfigErrorCode::kOutOfRange,
+            "fill.open_default_margin",
+            "开放边界的回退余量必须为负值（向外延伸）");
+    }
 
     requirePositive(
         issues, "path.robot_width", config.path.robot_width);

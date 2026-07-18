@@ -33,8 +33,8 @@ yingshi::PlanningRequest makeNotchedRequest()
     request.polygon.addRing(hole);
     request.holes.push_back(hole);
 
-    request.robot_width = 0.95;
-    request.coverage_width = 0.45;
+    request.robot_width = 0.75;
+    request.coverage_width = 0.90;
     request.mid_hl_width_ratio = 0.20;
     request.no_hl_width_ratio = 0.0;
     request.swath_overlap_ratio = 0.03;
@@ -65,6 +65,22 @@ double pathLength(const std::vector<f2c::types::Point>& points)
     return length;
 }
 
+TEST(PlannerCore, UsesValidatedV97PhysicalDefaults)
+{
+    const yingshi::PlanningRequest request;
+
+    EXPECT_DOUBLE_EQ(request.robot_width, 0.75);
+    EXPECT_DOUBLE_EQ(request.coverage_width, 0.90);
+    EXPECT_DOUBLE_EQ(request.mid_hl_width_ratio, 0.20);
+    EXPECT_DOUBLE_EQ(request.no_hl_width_ratio, 0.0);
+    EXPECT_DOUBLE_EQ(request.swath_overlap_ratio, 0.03);
+    EXPECT_DOUBLE_EQ(request.min_swath_length, 0.5);
+    EXPECT_TRUE(request.use_sweep_decomp);
+    EXPECT_TRUE(request.swath_angle_optimization);
+    EXPECT_TRUE(request.filter_tiny_cells);
+    EXPECT_TRUE(request.path_simplify_enabled);
+}
+
 TEST(PlannerCore, MatchesValidatedNotchedRouteBaseline)
 {
     yingshi::PlannerCore planner;
@@ -73,7 +89,7 @@ TEST(PlannerCore, MatchesValidatedNotchedRouteBaseline)
 
     ASSERT_TRUE(result.success) << result.error_message;
     EXPECT_EQ(result.total_swaths, 48U);
-    EXPECT_LT(pathLength(result.path_points), 460.0);
+    EXPECT_NEAR(pathLength(result.path_points), 454.51, 2.0);
     EXPECT_FALSE(result.path_has_crossings);
 }
 
