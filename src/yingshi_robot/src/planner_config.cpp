@@ -1,9 +1,12 @@
 #include "yingshi_robot/planner_config.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <exception>
 #include <initializer_list>
 #include <limits>
+#include <sstream>
 #include <string>
 
 namespace yingshi {
@@ -85,6 +88,38 @@ bool nearlyEqual(double lhs, double rhs)
            std::abs(lhs - rhs) <= kConsistencyTolerance;
 }
 
+bool validAngleCandidates(const std::string& candidates)
+{
+    if (candidates.empty()) {
+        return true;
+    }
+
+    const auto last_non_space = candidates.find_last_not_of(" \t\r\n");
+    if (last_non_space == std::string::npos ||
+        candidates[last_non_space] == ',') {
+        return false;
+    }
+
+    std::istringstream stream(candidates);
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        try {
+            std::size_t consumed = 0;
+            const double value = std::stod(token, &consumed);
+            while (consumed < token.size() &&
+                   std::isspace(static_cast<unsigned char>(token[consumed]))) {
+                ++consumed;
+            }
+            if (consumed != token.size() || !std::isfinite(value)) {
+                return false;
+            }
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 std::vector<PlannerConfigIssue> validatePlannerConfig(
@@ -109,8 +144,9 @@ std::vector<PlannerConfigIssue> validatePlannerConfig(
         issues, "swath.min_swath_length",
         config.swath.min_swath_length, 0.0,
         std::numeric_limits<double>::max());
-    requireFinite(
-        issues, "swath.endpoint_shrink", config.swath.endpoint_shrink);
+    requireRange(
+        issues, "swath.endpoint_shrink", config.swath.endpoint_shrink,
+        0.0, std::numeric_limits<double>::max());
 
     requirePositive(
         issues, "fill.coverage_width", config.fill.coverage_width);
@@ -142,10 +178,33 @@ std::vector<PlannerConfigIssue> validatePlannerConfig(
         issues, "path.simplify_turn_threshold",
         config.path.simplify_turn_threshold, 0.0,
         std::numeric_limits<double>::max());
-    requireFinite(
-        issues, "path.endpoint_shrink", config.path.endpoint_shrink);
+    requireRange(
+        issues, "path.endpoint_shrink", config.path.endpoint_shrink,
+        0.0, std::numeric_limits<double>::max());
     requireFinite(
         issues, "path.boundary_margin", config.path.boundary_margin);
+
+    requireFinite(
+        issues, "runtime.decomposition_angle",
+        config.runtime.decomposition_angle);
+    requireRange(
+        issues, "runtime.mid_hl_width_ratio",
+        config.runtime.mid_hl_width_ratio, 0.0,
+        std::numeric_limits<double>::max());
+    requireRange(
+        issues, "runtime.no_hl_width_ratio",
+        config.runtime.no_hl_width_ratio, 0.0,
+        std::numeric_limits<double>::max());
+    requireRange(
+        issues, "runtime.min_hole_area",
+        config.runtime.min_hole_area, 0.0,
+        std::numeric_limits<double>::max());
+    requirePositive(
+        issues, "runtime.eval_grid_resolution",
+        config.runtime.eval_grid_resolution);
+    requireRange(
+        issues, "runtime.eval_coverage_threshold",
+        config.runtime.eval_coverage_threshold, 0.0, 1.0);
 
     if (!contains(config.fill.boundary_type, {"closed", "open", "custom"})) {
         addIssue(
@@ -171,6 +230,12 @@ std::vector<PlannerConfigIssue> validatePlannerConfig(
         addIssue(
             issues, PlannerConfigErrorCode::kUnsupportedValue,
             "path.turn_planner_type", "未知转弯规划器");
+    }
+    if (!validAngleCandidates(config.swath.angle_candidates)) {
+        addIssue(
+            issues, PlannerConfigErrorCode::kUnsupportedValue,
+            "swath.angle_candidates",
+            "候选角度必须是逗号分隔的有限数值");
     }
 
     if (!nearlyEqual(

@@ -13,6 +13,7 @@
 
 // ── 模块化重构：独立算法模块 ──
 #include "yingshi_robot/planner_params.hpp"
+#include "yingshi_robot/planner_config.hpp"
 #include "yingshi_robot/decomposer.hpp"
 #include "yingshi_robot/swath_generator.hpp"
 #include "yingshi_robot/boundary_filler.hpp"
@@ -32,6 +33,7 @@
 #include <utility>
 #include <chrono>
 #include <functional>
+#include <stdexcept>
 
 namespace {
 
@@ -154,22 +156,54 @@ public:
         this->declare_parameter("boundary_coverage_margin", -0.3);
         this->declare_parameter("boundary_open_default_margin", -0.3);  // open 边界默认延伸量 (m)，负值=向外延伸
 
-        updateParameters();
+        auto initial_state = readParameterState();
+        const auto initial_issues =
+            yingshi::validatePlannerConfig(
+                plannerConfigSnapshot(initial_state));
+        if (!initial_issues.empty()) {
+            throw std::invalid_argument(
+                "Invalid initial planner configuration: " +
+                formatConfigIssues(initial_issues));
+        }
+        updateParsedAngleCandidates(initial_state);
+        commitParameterState(std::move(initial_state));
 
         // 添加参数回调
         auto param_callback = 
             [this](const std::vector<rclcpp::Parameter> &parameters) -> rcl_interfaces::msg::SetParametersResult {
                 auto result = rcl_interfaces::msg::SetParametersResult();
+                try {
+                    auto candidate = readParameterState(&parameters);
+                    const auto issues = yingshi::validatePlannerConfig(
+                        plannerConfigSnapshot(candidate));
+                    if (!issues.empty()) {
+                        result.successful = false;
+                        result.reason = formatConfigIssues(issues);
+                        RCLCPP_ERROR(
+                            this->get_logger(),
+                            "Rejected planner parameter update: %s",
+                            result.reason.c_str());
+                        return result;
+                    }
+
+                    updateParsedAngleCandidates(candidate);
+                    // on-set 回调只验证。活动配置在参数服务器提交后，
+                    // 由规划/发布入口读取并一次性应用。
+                    parameters_dirty_ = true;
+                } catch (const std::exception& exception) {
+                    result.successful = false;
+                    result.reason = std::string("Invalid parameter type: ") +
+                                    exception.what();
+                    return result;
+                }
+
                 result.successful = true;
-                
                 for (const auto &param : parameters) {
-                    RCLCPP_INFO(this->get_logger(), 
-                        "Parameter '%s' changed to: %s", 
-                        param.get_name().c_str(), 
+                    RCLCPP_INFO(this->get_logger(),
+                        "Parameter '%s' changed to: %s",
+                        param.get_name().c_str(),
                         param.value_to_string().c_str());
                 }
-                
-                updateParameters(&parameters);
                 return result;
             };
 
@@ -309,6 +343,15 @@ public:
         // 初始化数组
         polygon_received_.fill(false);
         holes_received_.fill(false);
+
+        // Humble 没有 post-set 回调；用轻量定时器在参数服务器提交后尽快应用。
+        parameter_refresh_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(10),
+            [this]() {
+                if (parameters_dirty_) {
+                    refreshCommittedParameterState();
+                }
+            });
         
         RCLCPP_INFO(this->get_logger(), "PolygonPlannerNode started with support for 4 polygons");
     }
@@ -328,7 +371,9 @@ private:
     size_t vis_json_cell_count_ = 0;  // Vis JSON 多 cell 追加计数器（per polygon处理）
 
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr parameter_refresh_timer_;
     OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+    bool parameters_dirty_ = false;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_cache_service_;
     
     // 多个发布器和订阅器
@@ -342,7 +387,126 @@ private:
     std::vector<rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr> decomposition_outline_pubs_;
     std::vector<rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr> infeasible_turn_pubs_;
 
-    void updateParameters(const std::vector<rclcpp::Parameter>* new_params = nullptr)
+    struct NodeParameterState {
+        double robot_width;
+        double min_turning_radius;
+        double max_diff_curv;
+        double coverage_width;
+        double path_resolution;
+        double decomposition_angle;
+        double mid_hl_width_ratio;
+        double no_hl_width_ratio;
+        double min_hole_area;
+        double swath_endpoint_shrink_distance;
+        double min_swath_length;
+        bool eval_enable_report;
+        double eval_grid_resolution;
+        bool eval_use_grid_method;
+        double eval_coverage_threshold;
+        std::string output_dir;
+        bool use_planner_core;
+        bool use_optimized_planner;
+        bool swath_angle_optimization;
+        std::string swath_angle_candidates;
+        std::vector<double> swath_angle_list;
+        bool filter_tiny_cells;
+        double min_cell_area_ratio;
+        bool path_simplify_enabled;
+        double path_simplify_tolerance;
+        double path_simplify_turn_threshold;
+        double swath_overlap_ratio;
+        bool ortools_exact_solve;
+        bool decomposition_angle_optimization;
+        bool decomposition_enabled;
+        bool use_sweep_decomp;
+        double merge_angle_threshold;
+        std::string swath_order_type;
+        std::string turn_planner_type;
+        std::string boundary_type;
+        double boundary_coverage_margin;
+        double boundary_open_default_margin;
+    };
+
+    static yingshi::PlannerConfig plannerConfigSnapshot(
+        const NodeParameterState& state)
+    {
+        yingshi::PlannerConfig config;
+
+        config.decomposer.use_sweep = state.use_sweep_decomp;
+        config.decomposer.merge_angle_threshold =
+            state.merge_angle_threshold;
+        config.decomposer.filter_tiny = state.filter_tiny_cells;
+        config.decomposer.min_cell_area_ratio = state.min_cell_area_ratio;
+
+        config.swath.coverage_width = state.coverage_width;
+        config.swath.swath_overlap_ratio = state.swath_overlap_ratio;
+        config.swath.angle_optimization = state.swath_angle_optimization;
+        config.swath.min_swath_length = state.min_swath_length;
+        config.swath.endpoint_shrink =
+            state.swath_endpoint_shrink_distance;
+        config.swath.angle_candidates = state.swath_angle_candidates;
+        config.swath.decomposition_angle_opt =
+            state.decomposition_angle_optimization;
+
+        config.fill.coverage_width = state.coverage_width;
+        config.fill.boundary_type = state.boundary_type;
+        config.fill.boundary_margin = state.boundary_coverage_margin;
+        config.fill.open_default_margin = state.boundary_open_default_margin;
+
+        config.path.turn_planner_type = state.turn_planner_type;
+        config.path.swath_order_type = state.swath_order_type;
+        config.path.simplify_enabled = state.path_simplify_enabled;
+        config.path.simplify_tolerance = state.path_simplify_tolerance;
+        config.path.simplify_turn_threshold =
+            state.path_simplify_turn_threshold;
+        config.path.ortools_exact_solve = state.ortools_exact_solve;
+        config.path.max_diff_curv = state.max_diff_curv;
+        config.path.min_turning_radius = state.min_turning_radius;
+        config.path.robot_width = state.robot_width;
+        config.path.coverage_width = state.coverage_width;
+        config.path.path_resolution = state.path_resolution;
+        config.path.swath_overlap_ratio = state.swath_overlap_ratio;
+        config.path.boundary_type = state.boundary_type;
+        config.path.endpoint_shrink =
+            state.swath_endpoint_shrink_distance;
+        config.path.boundary_margin = state.boundary_coverage_margin;
+
+        config.runtime.decomposition_angle = state.decomposition_angle;
+        config.runtime.mid_hl_width_ratio = state.mid_hl_width_ratio;
+        config.runtime.no_hl_width_ratio = state.no_hl_width_ratio;
+        config.runtime.min_hole_area = state.min_hole_area;
+        config.runtime.eval_grid_resolution = state.eval_grid_resolution;
+        config.runtime.eval_coverage_threshold =
+            state.eval_coverage_threshold;
+        return config;
+    }
+
+    static std::string formatConfigIssues(
+        const std::vector<yingshi::PlannerConfigIssue>& issues)
+    {
+        std::ostringstream message;
+        for (std::size_t i = 0; i < issues.size(); ++i) {
+            if (i > 0) {
+                message << "; ";
+            }
+            message << issues[i].field << ": " << issues[i].message;
+        }
+        return message.str();
+    }
+
+    static void updateParsedAngleCandidates(NodeParameterState& state)
+    {
+        std::vector<double> parsed_angles;
+        std::istringstream angle_stream(state.swath_angle_candidates);
+        std::string token;
+        while (std::getline(angle_stream, token, ',')) {
+            parsed_angles.push_back(std::stod(token) * M_PI / 180.0);
+        }
+        state.swath_angle_list = std::move(parsed_angles);
+    }
+
+    NodeParameterState readParameterState(
+        const std::vector<rclcpp::Parameter>* new_params = nullptr) const
     {
         // 辅助 lambda：从回调参数中查找最新值，找不到则用 get_parameter（初始加载路径）
         auto get_double = [&](const std::string& name) -> double {
@@ -357,81 +521,183 @@ private:
             if (new_params) for (auto& p : *new_params) if (p.get_name() == name) return p.as_string();
             return this->get_parameter(name).as_string();
         };
+        NodeParameterState state;
         // 更新参数值（优先用回调中的新值，避免 ROS2 参数回调时序问题）
-        robot_width_ = get_double("robot_width");
-        min_turning_radius_ = get_double("min_turning_radius");
-        max_diff_curv_ = get_double("max_diff_curv");
-        coverage_width_ = get_double("coverage_width");
-        path_resolution_ = get_double("path_resolution");
-        decomposition_angle_ = get_double("decomposition_angle");
-        mid_hl_width_ratio_ = get_double("mid_hl_width_ratio");
-        no_hl_width_ratio_ = get_double("no_hl_width_ratio");
-        min_hole_area_ = get_double("min_hole_area");
-        swath_endpoint_shrink_distance_ = get_double("swath_endpoint_shrink_distance");
-        min_swath_length_ = get_double("min_swath_length");
+        state.robot_width = get_double("robot_width");
+        state.min_turning_radius = get_double("min_turning_radius");
+        state.max_diff_curv = get_double("max_diff_curv");
+        state.coverage_width = get_double("coverage_width");
+        state.path_resolution = get_double("path_resolution");
+        state.decomposition_angle = get_double("decomposition_angle");
+        state.mid_hl_width_ratio = get_double("mid_hl_width_ratio");
+        state.no_hl_width_ratio = get_double("no_hl_width_ratio");
+        state.min_hole_area = get_double("min_hole_area");
+        state.swath_endpoint_shrink_distance =
+            get_double("swath_endpoint_shrink_distance");
+        state.min_swath_length = get_double("min_swath_length");
 
         // ── 评估参数 ──
-        eval_enable_report_ = get_bool("eval_enable_report");
-        eval_grid_resolution_ = get_double("eval_grid_resolution");
-        eval_use_grid_method_ = get_bool("eval_use_grid_method");
-        eval_coverage_threshold_ = get_double("eval_coverage_threshold");
-        output_dir_ = get_string("output_dir");
-        use_planner_core_ = get_bool("use_planner_core");
+        state.eval_enable_report = get_bool("eval_enable_report");
+        state.eval_grid_resolution = get_double("eval_grid_resolution");
+        state.eval_use_grid_method = get_bool("eval_use_grid_method");
+        state.eval_coverage_threshold =
+            get_double("eval_coverage_threshold");
+        state.output_dir = get_string("output_dir");
+        state.use_planner_core = get_bool("use_planner_core");
 
         // ── 优化参数 ──
-        use_optimized_planner_ = get_bool("use_optimized_planner");
-        swath_angle_optimization_ = get_bool("swath_angle_optimization");
-        swath_angle_candidates_ = get_string("swath_angle_candidates");
-        filter_tiny_cells_ = get_bool("filter_tiny_cells");
-        min_cell_area_ratio_ = get_double("min_cell_area_ratio");
-        path_simplify_enabled_ = get_bool("path_simplify_enabled");
-        path_simplify_tolerance_ = get_double("path_simplify_tolerance");
-        path_simplify_turn_threshold_ = get_double("path_simplify_turn_threshold");
-        swath_overlap_ratio_ = get_double("swath_overlap_ratio");
-        ortools_exact_solve_ = get_bool("ortools_exact_solve");
-        decomposition_angle_optimization_ = get_bool("decomposition_angle_optimization");
-        decomposition_enabled_ = get_bool("decomposition_enabled");
-        use_sweep_decomp_ = get_bool("use_sweep_decomp");
-        merge_angle_threshold_ = get_double("merge_angle_threshold");
-        swath_order_type_ = get_string("swath_order_type");
-        turn_planner_type_ = get_string("turn_planner_type");
+        state.use_optimized_planner = get_bool("use_optimized_planner");
+        state.swath_angle_optimization =
+            get_bool("swath_angle_optimization");
+        state.swath_angle_candidates =
+            get_string("swath_angle_candidates");
+        state.filter_tiny_cells = get_bool("filter_tiny_cells");
+        state.min_cell_area_ratio = get_double("min_cell_area_ratio");
+        state.path_simplify_enabled =
+            get_bool("path_simplify_enabled");
+        state.path_simplify_tolerance =
+            get_double("path_simplify_tolerance");
+        state.path_simplify_turn_threshold =
+            get_double("path_simplify_turn_threshold");
+        state.swath_overlap_ratio = get_double("swath_overlap_ratio");
+        state.ortools_exact_solve = get_bool("ortools_exact_solve");
+        state.decomposition_angle_optimization =
+            get_bool("decomposition_angle_optimization");
+        state.decomposition_enabled = get_bool("decomposition_enabled");
+        state.use_sweep_decomp = get_bool("use_sweep_decomp");
+        state.merge_angle_threshold = get_double("merge_angle_threshold");
+        state.swath_order_type = get_string("swath_order_type");
+        state.turn_planner_type = get_string("turn_planner_type");
 
         // ── 边界覆盖策略 ──
-        boundary_type_ = get_string("boundary_type");
-        boundary_coverage_margin_ = get_double("boundary_coverage_margin");
-        boundary_open_default_margin_ = get_double("boundary_open_default_margin");
+        state.boundary_type = get_string("boundary_type");
+        state.boundary_coverage_margin =
+            get_double("boundary_coverage_margin");
+        state.boundary_open_default_margin =
+            get_double("boundary_open_default_margin");
+        return state;
+    }
 
-        // 解析角度候选列表
-        swath_angle_list_.clear();
-        std::istringstream angle_stream(swath_angle_candidates_);
-        std::string token;
-        while (std::getline(angle_stream, token, ',')) {
-            try {
-                double deg = std::stod(token);
-                swath_angle_list_.push_back(deg * M_PI / 180.0);  // 转为弧度
-            } catch (...) {
-                RCLCPP_WARN(this->get_logger(),
-                           "Invalid swath angle candidate: '%s', skipping", token.c_str());
-            }
+    void commitParameterState(NodeParameterState state)
+    {
+        robot_width_ = state.robot_width;
+        min_turning_radius_ = state.min_turning_radius;
+        max_diff_curv_ = state.max_diff_curv;
+        coverage_width_ = state.coverage_width;
+        path_resolution_ = state.path_resolution;
+        decomposition_angle_ = state.decomposition_angle;
+        mid_hl_width_ratio_ = state.mid_hl_width_ratio;
+        no_hl_width_ratio_ = state.no_hl_width_ratio;
+        min_hole_area_ = state.min_hole_area;
+        swath_endpoint_shrink_distance_ =
+            state.swath_endpoint_shrink_distance;
+        min_swath_length_ = state.min_swath_length;
+        eval_enable_report_ = state.eval_enable_report;
+        eval_grid_resolution_ = state.eval_grid_resolution;
+        eval_use_grid_method_ = state.eval_use_grid_method;
+        eval_coverage_threshold_ = state.eval_coverage_threshold;
+        output_dir_ = std::move(state.output_dir);
+        use_planner_core_ = state.use_planner_core;
+        use_optimized_planner_ = state.use_optimized_planner;
+        swath_angle_optimization_ = state.swath_angle_optimization;
+        swath_angle_candidates_ = std::move(state.swath_angle_candidates);
+        swath_angle_list_ = std::move(state.swath_angle_list);
+        filter_tiny_cells_ = state.filter_tiny_cells;
+        min_cell_area_ratio_ = state.min_cell_area_ratio;
+        path_simplify_enabled_ = state.path_simplify_enabled;
+        path_simplify_tolerance_ = state.path_simplify_tolerance;
+        path_simplify_turn_threshold_ =
+            state.path_simplify_turn_threshold;
+        swath_overlap_ratio_ = state.swath_overlap_ratio;
+        ortools_exact_solve_ = state.ortools_exact_solve;
+        decomposition_angle_optimization_ =
+            state.decomposition_angle_optimization;
+        decomposition_enabled_ = state.decomposition_enabled;
+        use_sweep_decomp_ = state.use_sweep_decomp;
+        merge_angle_threshold_ = state.merge_angle_threshold;
+        swath_order_type_ = std::move(state.swath_order_type);
+        turn_planner_type_ = std::move(state.turn_planner_type);
+        boundary_type_ = std::move(state.boundary_type);
+        boundary_coverage_margin_ = state.boundary_coverage_margin;
+        boundary_open_default_margin_ =
+            state.boundary_open_default_margin;
+    }
+
+    bool planningStateEquivalent(const NodeParameterState& state) const
+    {
+        return
+            state.robot_width == robot_width_ &&
+            state.min_turning_radius == min_turning_radius_ &&
+            state.max_diff_curv == max_diff_curv_ &&
+            state.coverage_width == coverage_width_ &&
+            state.path_resolution == path_resolution_ &&
+            state.decomposition_angle == decomposition_angle_ &&
+            state.mid_hl_width_ratio == mid_hl_width_ratio_ &&
+            state.no_hl_width_ratio == no_hl_width_ratio_ &&
+            state.min_hole_area == min_hole_area_ &&
+            state.swath_endpoint_shrink_distance ==
+                swath_endpoint_shrink_distance_ &&
+            state.min_swath_length == min_swath_length_ &&
+            state.use_planner_core == use_planner_core_ &&
+            state.use_optimized_planner == use_optimized_planner_ &&
+            state.swath_angle_optimization ==
+                swath_angle_optimization_ &&
+            state.swath_angle_candidates == swath_angle_candidates_ &&
+            state.filter_tiny_cells == filter_tiny_cells_ &&
+            state.min_cell_area_ratio == min_cell_area_ratio_ &&
+            state.path_simplify_enabled == path_simplify_enabled_ &&
+            state.path_simplify_tolerance == path_simplify_tolerance_ &&
+            state.path_simplify_turn_threshold ==
+                path_simplify_turn_threshold_ &&
+            state.swath_overlap_ratio == swath_overlap_ratio_ &&
+            state.ortools_exact_solve == ortools_exact_solve_ &&
+            state.decomposition_angle_optimization ==
+                decomposition_angle_optimization_ &&
+            state.decomposition_enabled == decomposition_enabled_ &&
+            state.use_sweep_decomp == use_sweep_decomp_ &&
+            state.merge_angle_threshold == merge_angle_threshold_ &&
+            state.swath_order_type == swath_order_type_ &&
+            state.turn_planner_type == turn_planner_type_ &&
+            state.boundary_type == boundary_type_ &&
+            state.boundary_coverage_margin == boundary_coverage_margin_ &&
+            state.boundary_open_default_margin ==
+                boundary_open_default_margin_;
+    }
+
+    bool refreshCommittedParameterState()
+    {
+        if (!parameters_dirty_) {
+            return true;
         }
 
-        // 参数合法性校验 — 拒绝零/负分辨率、非法枚举值、越界比例
-        if (eval_grid_resolution_ <= 0.0) eval_grid_resolution_ = 0.1;
-        if (coverage_width_ <= 0.0) coverage_width_ = 1.0;
-        if (robot_width_ <= 0.0) robot_width_ = 1.0;
-        if (swath_overlap_ratio_ < 0.0) swath_overlap_ratio_ = 0.0;
-        if (swath_overlap_ratio_ > 0.5) swath_overlap_ratio_ = 0.5;
-        if (merge_angle_threshold_ < 0.0) merge_angle_threshold_ = 45.0;
-        if (merge_angle_threshold_ > 90.0) merge_angle_threshold_ = 90.0;
-        const std::vector<std::string> valid_boundary = {"closed","open","custom"};
-        if (std::find(valid_boundary.begin(), valid_boundary.end(), boundary_type_) == valid_boundary.end())
-            boundary_type_ = "closed";
-        const std::vector<std::string> valid_order = {"boustrophedon","snake","spiral","none"};
-        if (std::find(valid_order.begin(), valid_order.end(), swath_order_type_) == valid_order.end())
-            swath_order_type_ = "boustrophedon";
-        const std::vector<std::string> valid_turn = {"direct","dubins","dubins_cc","reeds_shepp"};
-        if (std::find(valid_turn.begin(), valid_turn.end(), turn_planner_type_) == valid_turn.end())
-            turn_planner_type_ = "direct";
+        try {
+            auto committed = readParameterState();
+            const auto issues = yingshi::validatePlannerConfig(
+                plannerConfigSnapshot(committed));
+            if (!issues.empty()) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "Committed planner parameters are invalid: %s",
+                    formatConfigIssues(issues).c_str());
+                return false;
+            }
+
+            updateParsedAngleCandidates(committed);
+            const bool invalidate_cache =
+                !planningStateEquivalent(committed);
+            commitParameterState(std::move(committed));
+            parameters_dirty_ = false;
+            if (invalidate_cache) {
+                invalidateAllPlanningCaches();
+            }
+            return true;
+        } catch (const std::exception& exception) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "Failed to apply committed planner parameters: %s",
+                exception.what());
+            return false;
+        }
     }
 
     void publishEmptyPlanningOutputs(int index)
@@ -496,6 +762,43 @@ private:
     {
         for (int i = 0; i < 4; ++i) {
             clearPlanningCacheForPolygon(i, publish_empty_outputs);
+        }
+    }
+
+    void invalidateAllPlanningCaches() noexcept
+    {
+        // 先关闭周期发布开关，确保即使清理/发布抛异常也不会复用旧路径。
+        polygon_received_.fill(false);
+        holes_received_.fill(false);
+        for (int i = 0; i < 4; ++i) {
+            try {
+                clearPlanningCacheForPolygon(i, false);
+            } catch (const std::exception& exception) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "Failed to clear planning cache %d: %s",
+                    i + 1, exception.what());
+            } catch (...) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "Failed to clear planning cache %d: unknown error",
+                    i + 1);
+            }
+        }
+        for (int i = 0; i < 4; ++i) {
+            try {
+                publishEmptyPlanningOutputs(i);
+            } catch (const std::exception& exception) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "Failed to publish empty planning output %d: %s",
+                    i + 1, exception.what());
+            } catch (...) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "Failed to publish empty planning output %d: unknown error",
+                    i + 1);
+            }
         }
     }
     
@@ -802,6 +1105,9 @@ private:
 
     void publishLastPath()
     {
+        if (!refreshCommittedParameterState()) {
+            return;
+        }
         // 为每个已接收的多边形重新发布路径
         for (int i = 0; i < 4; ++i) {
             if (!polygon_received_[i]) continue;
@@ -1037,6 +1343,9 @@ private:
 
     void holesCallback(const geometry_msgs::msg::Polygon::SharedPtr msg, int polygon_id)
     {
+        if (!refreshCommittedParameterState()) {
+            return;
+        }
         int index = polygon_id - 1;  // 转换为数组索引 (1-4 -> 0-3)
         
         // 解析holes消息（使用特殊标记x=1e10分隔不同的hole）
@@ -1113,6 +1422,9 @@ private:
 
     void polygonCallback(const geometry_msgs::msg::Polygon::SharedPtr msg, int polygon_id)
     {
+        if (!refreshCommittedParameterState()) {
+            return;
+        }
         int index = polygon_id - 1;  // 转换为数组索引 (1-4 -> 0-3)
 
         RCLCPP_INFO(this->get_logger(), "Received polygon_%d with %zu points:",
