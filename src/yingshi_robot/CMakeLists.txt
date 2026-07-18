@@ -150,6 +150,13 @@ if(BUILD_TESTING)
   target_link_libraries(planner_config_test
     coverage_planner_core
   )
+
+  ament_add_gtest(artifact_sink_test
+    test/artifact_sink_test.cpp
+  )
+  target_include_directories(artifact_sink_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 install(TARGETS

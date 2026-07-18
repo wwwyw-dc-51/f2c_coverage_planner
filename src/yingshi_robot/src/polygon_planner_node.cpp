@@ -20,6 +20,7 @@
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_sanity_check.hpp"
 #include "yingshi_robot/planner_core.hpp"
+#include "yingshi_robot/artifact_sink.hpp"
 
 #include <fstream>
 #include <iomanip>
@@ -119,7 +120,8 @@ public:
         this->declare_parameter("eval_grid_resolution", 0.1);
         this->declare_parameter("eval_use_grid_method", false);
         this->declare_parameter("eval_coverage_threshold", 0.99);
-        this->declare_parameter("output_dir", "/tmp");  // 调试输出目录，实车可改为只读挂载路径
+        this->declare_parameter(
+            "output_dir", yingshi::defaultArtifactDirectory());
         this->declare_parameter("use_planner_core", false);  // P2 迁移开关：true=PlannerCore管线
 
         // ── 优化参数 ──

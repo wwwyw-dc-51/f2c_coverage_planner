@@ -1,9 +1,18 @@
 #pragma once
+#include <cstdint>
+#include <filesystem>
 #include <string>
 #include <fstream>
 #include <vector>
 
 namespace yingshi {
+
+inline std::string defaultArtifactDirectory()
+{
+    std::error_code error;
+    const auto directory = std::filesystem::temp_directory_path(error);
+    return error ? std::string(".") : directory.string();
+}
 
 // ========== 调试产物输出接口 ==========
 // 实车部署使用 NullSink（零开销），
