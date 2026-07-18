@@ -155,7 +155,7 @@ def render_cells(scenario_name, outer, holes, cells_data, output_png):
             continue
         color = colors[ci % len(colors)]
         cp = MPolygon(boundary, fill=True, facecolor=color, edgecolor='black',
-                      linewidth=1.5, alpha=0.35)
+                      linewidth=1.5, alpha=0.6)
         ax.add_patch(cp)
         # 标注 cell ID
         cx = sum(p[0] for p in boundary) / len(boundary)
@@ -181,8 +181,7 @@ def render_cells(scenario_name, outer, holes, cells_data, output_png):
     ax.text(0.02, 0.98, f'Cells: {len(cells_data)} | ● entry  ■ exit',
             transform=ax.transAxes, fontsize=9, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    plt.tight_layout()
-    plt.savefig(output_png, dpi=120, bbox_inches='tight')
+    plt.savefig(output_png, dpi=120)
     plt.close()
     print(f'  Rendered cells: {output_png}')
 
@@ -211,7 +210,7 @@ def render_connections(scenario_name, outer, holes, cells_data, connections_data
             continue
         color = colors[ci % len(colors)]
         cp = MPolygon(boundary, fill=True, facecolor=color, edgecolor='black',
-                      linewidth=1, alpha=0.15)
+                      linewidth=1, alpha=0.6)
         ax.add_patch(cp)
         cx = sum(p[0] for p in boundary) / len(boundary)
         cy = sum(p[1] for p in boundary) / len(boundary)
@@ -258,8 +257,7 @@ def render_connections(scenario_name, outer, holes, cells_data, connections_data
     ax.text(0.02, 0.98, f'Cells: {len(cells_data)} | Route links: {len(connections_data)} | ○ entry  ■ exit',
             transform=ax.transAxes, fontsize=9, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    plt.tight_layout()
-    plt.savefig(output_png, dpi=120, bbox_inches='tight')
+    plt.savefig(output_png, dpi=120)
     plt.close()
     print(f'  Rendered connections: {output_png}')
 
