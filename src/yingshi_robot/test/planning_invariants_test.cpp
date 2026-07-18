@@ -413,6 +413,20 @@ TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
         << "Old row-spacing offset (1.5635) must not appear";
 }
 
+TEST(SwathGeneration, FailsClosedWhenAnyRetainedCellHasNoValidSwath)
+{
+    f2c::types::Cells cells;
+    cells.addGeometry(makeRectangle(0.0, 0.0, 10.0, 10.0));
+    cells.addGeometry(makeRectangle(20.0, 0.0, 20.1, 0.1));
+    const auto full_polygon = makeRectangle(0.0, 0.0, 21.0, 10.0);
+
+    const auto generated = yingshi::generateSwathsForAllCells(
+        cells, full_polygon, 0.873, 0.90, 0.0, 0.5, true, {});
+
+    EXPECT_EQ(generated.sizeTotal(), 0U);
+    EXPECT_EQ(generated.size(), 0U);
+}
+
 TEST(BoundaryFill, RebalancesNearCoincidentSwathsInASingleNarrowRectangle)
 {
     const auto corridor = makeRectangle(0.15, 0.15, 1.85, 19.85);

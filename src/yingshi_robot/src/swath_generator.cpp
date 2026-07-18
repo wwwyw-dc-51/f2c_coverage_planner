@@ -312,15 +312,23 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
 
             for (double ang : cands) {
                 size_t total = 0;
+                bool covers_all_cells = true;
                 std::vector<f2c::types::Swaths> cell_swaths;
                 cell_swaths.reserve(no_hl.size());
                 for (size_t ci = 0; ci < no_hl.size(); ++ci) {
                     auto cs = swath_gen.generateSwaths(ang, r_w,
                         no_hl.getGeometry(ci));
+                    size_t removed_count = 0;
+                    cs = filterShortSwaths(
+                        cs, min_swath_length, removed_count);
+                    if (cs.size() == 0) {
+                        covers_all_cells = false;
+                        break;
+                    }
                     total += cs.size();
                     cell_swaths.push_back(std::move(cs));
                 }
-                if (total > 0 && total < best_total) {
+                if (covers_all_cells && total < best_total) {
                     best_total = total;
                     best_ang = ang;
                     best_cell_swaths = std::move(cell_swaths);
@@ -329,21 +337,19 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
 
             // 用最优全局角度生成 swaths + 边界间隙补填
             for (size_t ci = 0; ci < best_cell_swaths.size(); ++ci) {
-                auto& cell_swaths = best_cell_swaths[ci];
-                size_t rm = 0;
-                f2c::types::Swaths cs = filterShortSwaths(
-                    cell_swaths, min_swath_length, rm);
+                f2c::types::Swaths cs = best_cell_swaths[ci];
                 fillBoundaryGaps(
                     cs, no_hl.getGeometry(ci), full_polygon,
                     best_ang, coverage_width,
                     swath_endpoint_shrink_distance);
-                if (cs.size() > 0) swaths_by_cells.push_back(cs);
+                swaths_by_cells.push_back(cs);
             }
         }
     }
 
     // 全局优化未生效时，走逐 cell 独立优化路径
     if (swaths_by_cells.sizeTotal() == 0) {
+        f2c::types::SwathsByCells per_cell_swaths;
         for (size_t ci = 0; ci < no_hl.size(); ++ci) {
             const auto& sub = no_hl.getGeometry(ci);
             double ang = computeCellMainDirection(sub);
@@ -362,8 +368,12 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
             fillBoundaryGaps(
                 cs, sub, full_polygon, ang, coverage_width,
                 swath_endpoint_shrink_distance);
-            if (cs.size() > 0) swaths_by_cells.push_back(cs);
+            if (cs.size() == 0) {
+                return f2c::types::SwathsByCells();
+            }
+            per_cell_swaths.push_back(cs);
         }
+        swaths_by_cells = per_cell_swaths;
     }
 
     if (no_hl.size() == 1 && swaths_by_cells.size() == 1) {

@@ -59,6 +59,7 @@ f2c::types::Swaths optimizeSwathAngle(
 // 参数 swath_angle_optimization 为 true 时做全局扫描：测试所有候选角度，
 // 选总 swath 数最少的统一角度；否则逐 cell 独立优化。
 // 返回按 cell 分组的 swaths（已 fillBoundaryGaps + filterShortSwaths）。
+// 任一保留 cell 无法生成有效 swath 时返回空结果，禁止静默部分覆盖。
 f2c::types::SwathsByCells generateSwathsForAllCells(
     const f2c::types::Cells& no_hl,
     const f2c::types::Cell& full_polygon,

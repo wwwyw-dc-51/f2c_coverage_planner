@@ -2125,34 +2125,44 @@ private:
                                cands.size());
                     for (double ang : cands) {
                         size_t total = 0;
+                        bool covers_all_cells = true;
                         std::vector<f2c::types::Swaths> cell_swaths;
                         cell_swaths.reserve(no_hl.size());
                         for (size_t ci = 0; ci < no_hl.size(); ++ci) {
                             auto cs = swath_generator.generateSwaths(ang, r_w,
                                 no_hl.getGeometry(ci));
+                            size_t removed_count = 0;
+                            cs = filterShortSwaths(
+                                cs, min_swath_length_, removed_count);
+                            if (cs.size() == 0) {
+                                covers_all_cells = false;
+                                break;
+                            }
                             total += cs.size();
                             cell_swaths.push_back(std::move(cs));
                         }
                         RCLCPP_INFO(this->get_logger(),
                                    "  Angle %.1f deg: %zu swaths total",
                                    ang * 180.0 / M_PI, total);
-                        if (total < best_total && total > 0) {
+                        if (covers_all_cells && total < best_total) {
                             best_total = total;
                             best_ang = ang;
                             best_cell_swaths = std::move(cell_swaths);
                         }
                     }
-                    RCLCPP_INFO(this->get_logger(),
-                               "  Best global angle: %.1f deg with %zu total swaths",
-                               best_ang * 180.0 / M_PI, best_total);
+                    if (best_cell_swaths.empty()) {
+                        RCLCPP_ERROR(this->get_logger(),
+                            "  No global angle covers every retained cell");
+                    } else {
+                        RCLCPP_INFO(this->get_logger(),
+                            "  Best global angle: %.1f deg with %zu total swaths",
+                            best_ang * 180.0 / M_PI, best_total);
+                    }
 
                     // 复用缓存的 swaths + 边界间隙补填
                     //   闭合硬边界：补的 swath 端点内缩，不撞墙
                     for (size_t ci = 0; ci < best_cell_swaths.size(); ++ci) {
-                        auto& cell_swaths = best_cell_swaths[ci];
-                        size_t rm = 0;
-                        f2c::types::Swaths cs = filterShortSwaths(cell_swaths,
-                            min_swath_length_, rm);
+                        f2c::types::Swaths cs = best_cell_swaths[ci];
                         // 边界间隙填补：filterShortSwaths 之后补，避免填缝被 min_swath_length 误杀
                         size_t sz_before = cs.size();
                         fillBoundaryGaps(cs, no_hl.getGeometry(ci), cell, best_ang,
@@ -2206,6 +2216,14 @@ private:
                 }
                 if (swaths_by_cells.sizeTotal() == 0) {
                     RCLCPP_WARN(this->get_logger(), "No swaths; skip polygon_%d", polygon_id);
+                    this->clearPlanningCacheForPolygon(index, true);
+                    return;
+                }
+                if (swaths_by_cells.size() != no_hl.size()) {
+                    RCLCPP_ERROR(this->get_logger(),
+                        "Incomplete swath generation: %zu/%zu cells covered; "
+                        "rejecting partial plan",
+                        swaths_by_cells.size(), no_hl.size());
                     this->clearPlanningCacheForPolygon(index, true);
                     return;
                 }
