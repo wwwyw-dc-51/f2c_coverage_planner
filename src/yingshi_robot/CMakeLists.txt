@@ -135,6 +135,16 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  ament_add_gtest(planner_core_test
+    test/planner_core_test.cpp
+  )
+  target_link_libraries(planner_core_test
+    coverage_planner_core
+  )
+  target_include_directories(planner_core_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
   if(YINGSHI_ENABLE_EVALUATION)
     ament_add_gtest(coverage_evaluator_test
       test/coverage_evaluator_test.cpp

@@ -283,6 +283,195 @@ f2c::types::Cells filterTinyCells(
     return filtered;
 }
 
+CellMergeResult mergeCellsWithSimilarDirection(
+    const f2c::types::Cells& cells,
+    const f2c::types::Cell& full_polygon,
+    double coverage_width,
+    double angle_threshold_deg,
+    bool protect_hole_separation)
+{
+    CellMergeResult merge_result;
+    merge_result.cells = cells;
+    if (cells.size() <= 1 || coverage_width <= 0.0) {
+        return merge_result;
+    }
+
+    const size_t cell_count = cells.size();
+    std::vector<double> cell_directions(cell_count);
+    for (size_t i = 0; i < cell_count; ++i) {
+        cell_directions[i] = computeCellMainDirection(cells.getGeometry(i));
+    }
+
+    std::vector<std::vector<bool>> adjacent(
+        cell_count, std::vector<bool>(cell_count, false));
+    for (size_t i = 0; i < cell_count; ++i) {
+        const auto& ring_i = cells.getGeometry(i).getExteriorRing();
+        for (size_t j = i + 1; j < cell_count; ++j) {
+            const auto& ring_j = cells.getGeometry(j).getExteriorRing();
+            double min_distance = std::numeric_limits<double>::max();
+            for (size_t pi = 0; pi < ring_i.size(); ++pi) {
+                const double ix = ring_i.getGeometry(pi).getX();
+                const double iy = ring_i.getGeometry(pi).getY();
+                for (size_t pj = 0; pj < ring_j.size(); ++pj) {
+                    min_distance = std::min(
+                        min_distance,
+                        std::hypot(
+                            ix - ring_j.getGeometry(pj).getX(),
+                            iy - ring_j.getGeometry(pj).getY()));
+                }
+            }
+            adjacent[i][j] = adjacent[j][i] =
+                min_distance < 2.0 * coverage_width;
+        }
+    }
+
+    const double angle_threshold =
+        std::clamp(angle_threshold_deg, 0.0, 90.0) * M_PI / 180.0;
+    std::vector<int> group(cell_count, -1);
+    int next_group = 0;
+    for (size_t i = 0; i < cell_count; ++i) {
+        if (group[i] >= 0) continue;
+        group[i] = next_group++;
+
+        for (size_t j = i + 1; j < cell_count; ++j) {
+            if (group[j] >= 0 || !adjacent[i][j]) continue;
+
+            double angle_i = cell_directions[i];
+            while (angle_i < 0.0) angle_i += M_PI;
+            while (angle_i >= M_PI) angle_i -= M_PI;
+            double angle_j = cell_directions[j];
+            while (angle_j < 0.0) angle_j += M_PI;
+            while (angle_j >= M_PI) angle_j -= M_PI;
+            double angle_diff = std::abs(angle_i - angle_j);
+            if (angle_diff > M_PI / 2.0) angle_diff = M_PI - angle_diff;
+            if (angle_diff >= angle_threshold) continue;
+
+            if (protect_hole_separation && full_polygon.size() > 1) {
+                const auto& ring_i =
+                    cells.getGeometry(i).getExteriorRing();
+                const auto& ring_j =
+                    cells.getGeometry(j).getExteriorRing();
+
+                auto ringCentroid = [](const f2c::types::LinearRing& ring) {
+                    if (ring.size() <= 1) {
+                        return f2c::types::Point(0.0, 0.0);
+                    }
+                    const size_t count = ring.size() - 1;
+                    double x = 0.0;
+                    double y = 0.0;
+                    for (size_t point_idx = 0; point_idx < count;
+                         ++point_idx) {
+                        x += ring.getGeometry(point_idx).getX();
+                        y += ring.getGeometry(point_idx).getY();
+                    }
+                    return f2c::types::Point(x / count, y / count);
+                };
+
+                const auto centroid_i = ringCentroid(ring_i);
+                const auto centroid_j = ringCentroid(ring_j);
+                bool crosses_hole = false;
+                for (size_t hole_idx = 0;
+                     hole_idx + 1 < full_polygon.size() && !crosses_hole;
+                     ++hole_idx) {
+                    const auto& hole =
+                        full_polygon.getInteriorRing(hole_idx);
+                    for (size_t edge_idx = 0;
+                         edge_idx + 1 < hole.size() && !crosses_hole;
+                         ++edge_idx) {
+                        const double ax = hole.getGeometry(edge_idx).getX();
+                        const double ay = hole.getGeometry(edge_idx).getY();
+                        const double bx =
+                            hole.getGeometry(edge_idx + 1).getX();
+                        const double by =
+                            hole.getGeometry(edge_idx + 1).getY();
+                        const double dx =
+                            centroid_j.getX() - centroid_i.getX();
+                        const double dy =
+                            centroid_j.getY() - centroid_i.getY();
+                        const double denominator =
+                            dx * (by - ay) - dy * (bx - ax);
+                        if (std::abs(denominator) < 1e-18) continue;
+                        const double t =
+                            ((ax - centroid_i.getX()) * (by - ay) -
+                             (ay - centroid_i.getY()) * (bx - ax)) /
+                            denominator;
+                        const double u =
+                            ((ax - centroid_i.getX()) * dy -
+                             (ay - centroid_i.getY()) * dx) /
+                            denominator;
+                        if (t > 0.001 && t < 0.999 &&
+                            u > 0.0 && u < 1.0) {
+                            crosses_hole = true;
+                        }
+                    }
+                }
+
+                if (crosses_hole) {
+                    double touch_distance =
+                        std::numeric_limits<double>::max();
+                    for (size_t pi = 0; pi + 1 < ring_i.size(); ++pi) {
+                        const double ix = ring_i.getGeometry(pi).getX();
+                        const double iy = ring_i.getGeometry(pi).getY();
+                        for (size_t pj = 0; pj + 1 < ring_j.size(); ++pj) {
+                            touch_distance = std::min(
+                                touch_distance,
+                                std::hypot(
+                                    ix - ring_j.getGeometry(pj).getX(),
+                                    iy - ring_j.getGeometry(pj).getY()));
+                        }
+                    }
+                    if (touch_distance >= coverage_width * 0.25) {
+                        continue;
+                    }
+                }
+            }
+
+            group[j] = group[i];
+        }
+    }
+
+    if (next_group >= static_cast<int>(cell_count)) {
+        return merge_result;
+    }
+
+    f2c::types::Cells merged_cells;
+    for (int group_id = 0; group_id < next_group; ++group_id) {
+        f2c::types::Cell merged_cell;
+        bool first = true;
+        size_t successful_merges = 0;
+        for (size_t i = 0; i < cell_count; ++i) {
+            if (group[i] != group_id) continue;
+            if (first) {
+                merged_cell = cells.getGeometry(i);
+                first = false;
+                continue;
+            }
+
+            f2c::types::Cells temporary(merged_cell);
+            auto union_result = temporary.unionOp(cells.getGeometry(i));
+            if (union_result.size() == 0) {
+                // 拓扑运算失败时保留当前单元，不能静默缩小作业区。
+                merged_cells.addGeometry(cells.getGeometry(i));
+                continue;
+            }
+            ++successful_merges;
+            merged_cell = union_result.getGeometry(0);
+            // 保持 legacy 的 MultiPolygon 顺序：首块继续参与后续合并，
+            // 其余分量先作为独立 Cell 输出，确保路线基线不漂移。
+            for (size_t result_idx = 1;
+                 result_idx < union_result.size(); ++result_idx) {
+                merged_cells.addGeometry(
+                    union_result.getGeometry(result_idx));
+            }
+        }
+        merge_result.merged_count += successful_merges;
+        merged_cells.addGeometry(merged_cell);
+    }
+
+    merge_result.cells = merged_cells;
+    return merge_result;
+}
+
 // ========== 从多边形边缘提取角度候选（边缘方向去重）==========
 // 依据 Rotating Calipers 定理：最优 swath 方向一定平行于多边形某条边
 std::vector<double> extractEdgeAngles(

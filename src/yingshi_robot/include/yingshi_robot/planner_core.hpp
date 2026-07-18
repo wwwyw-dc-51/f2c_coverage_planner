@@ -100,6 +100,7 @@ struct PlanningResult {
 //   - rectilinear 分解 + no_hl secondary erosion
 //   - swath 生成 + fillBoundaryGaps + filterShortSwaths
 //   - swath_angle_optimization（多角度候选，选 swath 数最少）
+//   - tiny-cell 过滤 + 相邻同向 Cell 合并（与 legacy 共用实现）
 //   - pruneRedundantCellSeamFills
 //   - greedyCellOrder / Snake 路由
 //   - genRoute（Boustrophedon TSP）+ Snake 直连
@@ -110,10 +111,9 @@ struct PlanningResult {
 //   - use_planner_core_:=true 切换至 planWithCore()（含评估输出）
 //
 // 待补齐（按优先级）：
-//   1. PlannerCore 与 legacy 管线结果对齐（当前 notched: core 77.3 vs legacy 87.3）
-//   2. boundary_coverage_margin 逐端点调整
-//   3. sweep_align_angle + 自适应 headland ratio
-//   4. PathSanityCheck 集成到 publish seam 前
+//   1. 全场景回归确认与 legacy 对齐（2026-07-18 修复前 notched: 77.8 vs 81.7）
+//   2. sweep_align_angle + 自适应 headland ratio
+//   3. PathSanityCheck 集成到 publish seam 前
 //
 // use_planner_core_ 默认 false；结果对齐并通过独立集成测试后切为 true。
 class PlannerCore {

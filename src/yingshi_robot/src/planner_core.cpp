@@ -161,6 +161,24 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
             return result;
         }
 
+        if (req.filter_tiny_cells) {
+            const double min_cell_area =
+                req.min_cell_area_ratio * req.coverage_width * req.robot_width;
+            no_hl = filterTinyCells(no_hl, min_cell_area);
+        }
+        if (no_hl.size() == 0) {
+            result.error_message = "Cell filtering produced zero cells";
+            return result;
+        }
+
+        if (no_hl.size() > 1) {
+            const double merge_angle_threshold = req.use_sweep_decomp
+                ? 60.0 : req.merge_angle_threshold;
+            no_hl = mergeCellsWithSimilarDirection(
+                no_hl, req.polygon, req.coverage_width,
+                merge_angle_threshold, req.use_sweep_decomp).cells;
+        }
+
         // ── 3. 生成 swaths（全局角度优化 + 边界填补）──
         f2c::types::SwathsByCells swaths_by_cells =
             generateSwathsForAllCells(

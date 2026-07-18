@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <fields2cover.h>
 #include <vector>
 #include "yingshi_robot/planner_params.hpp"
@@ -32,6 +33,19 @@ double computeCellMainDirection(const f2c::types::Cell& cell);
 f2c::types::Cells filterTinyCells(
     const f2c::types::Cells& cells,
     double min_area);
+
+struct CellMergeResult {
+    f2c::types::Cells cells;
+    std::size_t merged_count = 0;
+};
+
+// 合并相邻且主方向接近的分解单元；孔洞保护用于避免跨障碍误合并。
+CellMergeResult mergeCellsWithSimilarDirection(
+    const f2c::types::Cells& cells,
+    const f2c::types::Cell& full_polygon,
+    double coverage_width,
+    double angle_threshold_deg,
+    bool protect_hole_separation);
 
 // 从多边形边缘提取所有唯一边缘方向角（去重排序）
 std::vector<double> extractEdgeAngles(

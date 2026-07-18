@@ -2065,179 +2065,21 @@ private:
                            "After tiny cell filter: %zu sub-cells remain", no_hl.size());
             }
 
-            // ── Cell 合并：相邻且 swath 方向相近的 cell 合并为一个大 cell ──
-            // 依据：Agarwal & Akella (2022) — 同向 cell 独立走增加无效掉头
-            //       WUR 论文 (Peijnenburg 2024) — 分解碎片化降低覆盖率
+            // ── Cell 合并：两条管线共用同一套几何策略 ──
             if (use_optimized_planner_ && no_hl.size() > 1) {
-                const size_t nc = no_hl.size();
-
-                // 1. 计算每个 cell 的 swath 主方向
-                // sweep模式: 放宽合并角度阈值(60°)，斜边cell也不会被错分
-                std::vector<double> cell_dirs(nc);
-                for (size_t i = 0; i < nc; ++i) {
-                    cell_dirs[i] = computeCellMainDirection(no_hl.getGeometry(i));
-                }
-                double merge_angle_threshold = use_sweep_decomp_ ? (60.0 * M_PI / 180.0) : (merge_angle_threshold_ * M_PI / 180.0);
-
-                // 2. 构建邻接矩阵：两 cell 边界最近距离 < coverage_width 视为相邻
-                std::vector<std::vector<bool>> adj(nc, std::vector<bool>(nc, false));
-                for (size_t i = 0; i < nc; ++i) {
-                    f2c::types::Cell cell_i = no_hl.getGeometry(i);
-                    const auto& ring_i = cell_i.getExteriorRing();
-                    for (size_t j = i + 1; j < nc; ++j) {
-                        f2c::types::Cell cell_j = no_hl.getGeometry(j);
-                        const auto& ring_j = cell_j.getExteriorRing();
-                        double min_d = std::numeric_limits<double>::max();
-                        for (size_t pi = 0; pi < ring_i.size(); ++pi) {
-                            double ix = ring_i.getGeometry(pi).getX();
-                            double iy = ring_i.getGeometry(pi).getY();
-                            for (size_t pj = 0; pj < ring_j.size(); ++pj) {
-                                double d = std::hypot(
-                                    ix - ring_j.getGeometry(pj).getX(),
-                                    iy - ring_j.getGeometry(pj).getY());
-                                if (d < min_d) min_d = d;
-                            }
-                        }
-                        adj[i][j] = adj[j][i] = (min_d < 2.0 * coverage_width_);
-                    }
-                }
-
-                // 3. 贪心分组：邻接 + 方向差 < 30° → 同组
-                std::vector<int> group(nc, -1);
-                int next_gid = 0;
-                for (size_t i = 0; i < nc; ++i) {
-                    if (group[i] >= 0) continue;
-                    group[i] = next_gid++;
-                    for (size_t j = i + 1; j < nc; ++j) {
-                        if (group[j] >= 0) continue;
-                        if (!adj[i][j]) continue;
-                        // 角度归一化到 [0, π)，比较方向差
-                        double a = cell_dirs[i];
-                        while (a < 0) a += M_PI;
-                        while (a >= M_PI) a -= M_PI;
-                        double b = cell_dirs[j];
-                        while (b < 0) b += M_PI;
-                        while (b >= M_PI) b -= M_PI;
-                        double diff = std::abs(a - b);
-                        if (diff > M_PI / 2) diff = M_PI - diff;
-                        if (diff < merge_angle_threshold) {
-                            // 孔洞隔离检查：孔洞两侧的 cell 不应合并
-                            // 检查两 cell 质心连线是否穿越孔洞
-                            if (use_sweep_decomp_ && cell.size() > 1) {
-                                // 计算 cell i 质心
-                                const auto& ring_i_cent = no_hl.getGeometry(i).getExteriorRing();
-                                double ci_x = 0, ci_y = 0;
-                                size_t ci_n = ring_i_cent.size() - 1;
-                                for (size_t pi = 0; pi < ci_n; ++pi) {
-                                    ci_x += ring_i_cent.getGeometry(pi).getX();
-                                    ci_y += ring_i_cent.getGeometry(pi).getY();
-                                }
-                                ci_x /= ci_n; ci_y /= ci_n;
-
-                                // 计算 cell j 质心
-                                const auto& ring_j_cent = no_hl.getGeometry(j).getExteriorRing();
-                                double cj_x = 0, cj_y = 0;
-                                size_t cj_n = ring_j_cent.size() - 1;
-                                for (size_t pj = 0; pj < cj_n; ++pj) {
-                                    cj_x += ring_j_cent.getGeometry(pj).getX();
-                                    cj_y += ring_j_cent.getGeometry(pj).getY();
-                                }
-                                cj_x /= cj_n; cj_y /= cj_n;
-
-                                // 检查质心连线是否穿过任意孔洞
-                                bool crosses_hole = false;
-                                for (size_t hi = 0; hi + 1 < cell.size() && !crosses_hole; ++hi) {
-                                    const auto& hr = cell.getInteriorRing(hi);
-                                    // 线段-孔洞相交：检查质心线段是否与孔洞边相交
-                                    for (size_t vi = 0; vi + 1 < hr.size() && !crosses_hole; ++vi) {
-                                        double ax = hr.getGeometry(vi).getX();
-                                        double ay = hr.getGeometry(vi).getY();
-                                        double bx = hr.getGeometry(vi+1).getX();
-                                        double by = hr.getGeometry(vi+1).getY();
-                                        double dx = cj_x - ci_x, dy = cj_y - ci_y;
-                                        double d = dx*(by-ay) - dy*(bx-ax);
-                                        if (std::abs(d) < 1e-18) continue;
-                                        double t = ((ax-ci_x)*(by-ay) - (ay-ci_y)*(bx-ax)) / d;
-                                        double u = ((ax-ci_x)*dy - (ay-ci_y)*dx) / d;
-                                        if (t > 0.001 && t < 0.999 && u > 0.0 && u < 1.0) {
-                                            crosses_hole = true;
-                                        }
-                                    }
-                                }
-                                if (crosses_hole) {
-                                    // ── Phase 2D: 斜边感知 — 区分真孔洞 vs 斜边界 ──
-                                    // 两 cell 质心连线穿过孔洞边，但若 cell 边界实际贴近
-                                    // （距离 < cov_width * 0.25），说明是斜边或共享边界误判，
-                                    // 应允许合并（避免 sweep 分解的斜边末端三角 cell 被孤立）。
-                                    // 孔洞顶点双向切割产生的小 cell 用更严阈值（0.25 vs 0.50），
-                                    // 防止 X 向切割被吞并回全宽条带。
-                                    double touch_dist = std::numeric_limits<double>::max();
-                                    for (size_t pi2 = 0; pi2 + 1 < ring_i_cent.size(); ++pi2) {
-                                        double ix = ring_i_cent.getGeometry(pi2).getX();
-                                        double iy = ring_i_cent.getGeometry(pi2).getY();
-                                        for (size_t pj2 = 0; pj2 + 1 < ring_j_cent.size(); ++pj2) {
-                                            double d = std::hypot(
-                                                ix - ring_j_cent.getGeometry(pj2).getX(),
-                                                iy - ring_j_cent.getGeometry(pj2).getY());
-                                            if (d < touch_dist) touch_dist = d;
-                                        }
-                                    }
-                                    if (touch_dist < coverage_width_ * 0.25) {
-                                        // 物理贴近（共享边界）→ 不是真孔洞分隔，允许合并
-                                        RCLCPP_DEBUG(this->get_logger(),
-                                            "  Cells %zu+%zu: centroid line crosses hole but "
-                                            "cells touch (%.2f m < %.2f m) — allowing merge",
-                                            i, j, touch_dist, coverage_width_ * 0.25);
-                                    } else {
-                                        continue;  // 真孔洞分隔，不合并
-                                    }
-                                }
-                            }
-
-                            group[j] = group[i];
-                        }
-                    }
-                }
-
-                // 4. 合并同组 cell（使用 GDAL Union）
-                if (next_gid < static_cast<int>(nc)) {
-                    f2c::types::Cells merged;
-                    size_t merge_count = 0;
-                    for (int g = 0; g < next_gid; ++g) {
-                        f2c::types::Cell merged_cell;
-                        bool first = true;
-                        int group_size = 0;
-                        for (size_t i = 0; i < nc; ++i) {
-                            if (group[i] != g) continue;
-                            ++group_size;
-                            if (first) {
-                                merged_cell = no_hl.getGeometry(i);
-                                first = false;
-                            } else {
-                                f2c::types::Cells tmp(merged_cell);
-                                auto result = tmp.unionOp(no_hl.getGeometry(i));
-                                if (result.size() >= 1) {
-                                    merged_cell = result.getGeometry(0);
-                                    // MultiPolygon → 多余的作为独立 cell 加入
-                                    for (size_t ri = 1; ri < result.size(); ++ri) {
-                                        merged.addGeometry(result.getGeometry(ri));
-                                    }
-                                } else {
-                                    RCLCPP_WARN(this->get_logger(),
-                                               "UnionOp failed for cell %zu (group %d),"
-                                               " keeping previous shape", i, g);
-                                }
-                            }
-                        }
-                        if (group_size > 1) merge_count += (group_size - 1);
-                        merged.addGeometry(merged_cell);
-                    }
+                const size_t cell_count_before = no_hl.size();
+                const double merge_angle_threshold =
+                    use_sweep_decomp_ ? 60.0 : merge_angle_threshold_;
+                auto merge_result = yingshi::mergeCellsWithSimilarDirection(
+                    no_hl, cell, coverage_width_, merge_angle_threshold,
+                    use_sweep_decomp_);
+                no_hl = std::move(merge_result.cells);
+                if (merge_result.merged_count > 0) {
                     RCLCPP_INFO(this->get_logger(),
-                               "Cell merging: %zu cells → %zu cells "
-                               "(%zu merged, angle threshold=%.0f°)",
-                               nc, merged.size(), merge_count,
-                               merge_angle_threshold * 180.0 / M_PI);
-                    no_hl = merged;
+                        "Cell merging: %zu cells → %zu cells "
+                        "(%zu merged, angle threshold=%.0f°)",
+                        cell_count_before, no_hl.size(),
+                        merge_result.merged_count, merge_angle_threshold);
                 }
             }
 
