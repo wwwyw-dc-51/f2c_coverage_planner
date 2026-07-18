@@ -674,4 +674,49 @@ TEST(HoleGeometry, BuildsAClosedRingFromUnclosedVertices)
     EXPECT_FALSE(yingshi::pointInPolygon(4.0, 2.0, ring));
 }
 
+TEST(HoleGeometry, DetectsANarrowHoleWithoutDependingOnSampleSpacing)
+{
+    const auto narrow_hole = yingshi::makeClosedRing({
+        f2c::types::Point(55.1, -0.1),
+        f2c::types::Point(55.3, -0.1),
+        f2c::types::Point(55.3, 0.1),
+        f2c::types::Point(55.1, 0.1),
+    });
+
+    EXPECT_TRUE(yingshi::segmentCrossesHole(
+        0.0, 0.0, 100.0, 0.0, {narrow_hole}, 10));
+}
+
+TEST(HoleGeometry, DoesNotTreatBoundaryContactAsEnteringAHole)
+{
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(5.0, 5.0),
+        f2c::types::Point(6.0, 5.0),
+        f2c::types::Point(6.0, 6.0),
+        f2c::types::Point(5.0, 6.0),
+    });
+    const std::vector<f2c::types::LinearRing> holes {hole};
+
+    EXPECT_FALSE(yingshi::pointInAnyHole(5.0, 5.5, holes));
+    EXPECT_FALSE(yingshi::segmentCrossesHole(
+        4.0, 5.0, 7.0, 5.0, holes, 10));
+    EXPECT_FALSE(yingshi::segmentCrossesHole(
+        4.0, 6.0, 6.0, 4.0, holes, 10));
+    EXPECT_FALSE(yingshi::segmentCrossesHole(
+        4.0, 5.5, 5.0, 5.5, holes, 10));
+}
+
+TEST(HoleGeometry, DetectsAShortSegmentThatCrossesAHoleBoundary)
+{
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(0.0, 0.0),
+        f2c::types::Point(1.0, 0.0),
+        f2c::types::Point(1.0, 1.0),
+        f2c::types::Point(0.0, 1.0),
+    });
+
+    EXPECT_TRUE(yingshi::segmentCrossesHole(
+        -1e-6, 0.5, 1e-6, 0.5, {hole}, 10));
+}
+
 }  // namespace

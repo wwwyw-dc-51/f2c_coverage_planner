@@ -68,11 +68,8 @@ inline PathSanityResult checkPathSanity(
     if (!hole_rings.empty()) {
         size_t in_hole = 0;
         for (const auto& pt : path_points) {
-            for (const auto& hole : hole_rings) {
-                if (pointInPolygon(pt.getX(), pt.getY(), hole)) {
-                    ++in_hole;
-                    break;
-                }
+            if (pointInAnyHole(pt.getX(), pt.getY(), hole_rings)) {
+                ++in_hole;
             }
         }
         if (in_hole > 0) {

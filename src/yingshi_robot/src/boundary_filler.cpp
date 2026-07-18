@@ -55,32 +55,176 @@ bool pointInPolygon(double px, double py, const f2c::types::LinearRing& ring)
     return inside;
 }
 
+namespace {
+
+bool pointStrictlyInsideRing(
+    double px, double py, const f2c::types::LinearRing& ring);
+
+}  // namespace
+
 // ========== 点是否在任意孔洞内 ==========
 bool pointInAnyHole(double px, double py,
                     const std::vector<f2c::types::LinearRing>& hole_rings)
 {
     for (const auto& hr : hole_rings) {
         if (hr.size() < 3) continue;
-        if (pointInPolygon(px, py, hr)) {
+        if (pointStrictlyInsideRing(px, py, hr)) {
             return true;
         }
     }
     return false;
 }
 
-// ========== 线段是否穿过孔洞（采样检测）==========
+namespace {
+
+constexpr double kIntersectionTolerance = 1e-10;
+
+size_t uniqueRingVertexCount(const f2c::types::LinearRing& ring)
+{
+    if (ring.size() < 2) return ring.size();
+    return ring.getGeometry(0).distance(
+        ring.getGeometry(ring.size() - 1)) <= kIntersectionTolerance
+        ? ring.size() - 1 : ring.size();
+}
+
+bool pointOnRingBoundary(
+    double px, double py, const f2c::types::LinearRing& ring)
+{
+    const size_t vertex_count = uniqueRingVertexCount(ring);
+    for (size_t i = 0; i < vertex_count; ++i) {
+        const size_t next = (i + 1) % vertex_count;
+        const double ax = ring.getGeometry(i).getX();
+        const double ay = ring.getGeometry(i).getY();
+        const double bx = ring.getGeometry(next).getX();
+        const double by = ring.getGeometry(next).getY();
+        const double dx = bx - ax;
+        const double dy = by - ay;
+        const double length_squared = dx * dx + dy * dy;
+        if (length_squared <=
+            kIntersectionTolerance * kIntersectionTolerance) {
+            continue;
+        }
+        const double projection =
+            ((px - ax) * dx + (py - ay) * dy) / length_squared;
+        if (projection < -kIntersectionTolerance ||
+            projection > 1.0 + kIntersectionTolerance) {
+            continue;
+        }
+        const double cross = (px - ax) * dy - (py - ay) * dx;
+        if (std::abs(cross) <=
+            kIntersectionTolerance * std::sqrt(length_squared)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pointStrictlyInsideRing(
+    double px, double py, const f2c::types::LinearRing& ring)
+{
+    return !pointOnRingBoundary(px, py, ring) &&
+           pointInPolygon(px, py, ring);
+}
+
+void appendIntersectionParameters(
+    double x0, double y0, double x1, double y1,
+    const f2c::types::LinearRing& ring,
+    std::vector<double>& parameters)
+{
+    const double segment_dx = x1 - x0;
+    const double segment_dy = y1 - y0;
+    const double segment_length_squared =
+        segment_dx * segment_dx + segment_dy * segment_dy;
+    if (segment_length_squared <=
+        kIntersectionTolerance * kIntersectionTolerance) {
+        return;
+    }
+
+    const size_t vertex_count = uniqueRingVertexCount(ring);
+    for (size_t i = 0; i < vertex_count; ++i) {
+        const size_t next = (i + 1) % vertex_count;
+        const double ax = ring.getGeometry(i).getX();
+        const double ay = ring.getGeometry(i).getY();
+        const double edge_dx = ring.getGeometry(next).getX() - ax;
+        const double edge_dy = ring.getGeometry(next).getY() - ay;
+        const double offset_x = ax - x0;
+        const double offset_y = ay - y0;
+        const double denominator =
+            segment_dx * edge_dy - segment_dy * edge_dx;
+
+        if (std::abs(denominator) > kIntersectionTolerance) {
+            const double t =
+                (offset_x * edge_dy - offset_y * edge_dx) / denominator;
+            const double u =
+                (offset_x * segment_dy - offset_y * segment_dx) /
+                denominator;
+            if (t >= -kIntersectionTolerance &&
+                t <= 1.0 + kIntersectionTolerance &&
+                u >= -kIntersectionTolerance &&
+                u <= 1.0 + kIntersectionTolerance) {
+                parameters.push_back(std::clamp(t, 0.0, 1.0));
+            }
+            continue;
+        }
+
+        const double collinear_cross =
+            offset_x * segment_dy - offset_y * segment_dx;
+        if (std::abs(collinear_cross) >
+            kIntersectionTolerance * std::sqrt(segment_length_squared)) {
+            continue;
+        }
+        const double edge_end_offset_x =
+            ring.getGeometry(next).getX() - x0;
+        const double edge_end_offset_y =
+            ring.getGeometry(next).getY() - y0;
+        const double t0 =
+            (offset_x * segment_dx + offset_y * segment_dy) /
+            segment_length_squared;
+        const double t1 =
+            (edge_end_offset_x * segment_dx +
+             edge_end_offset_y * segment_dy) /
+            segment_length_squared;
+        const double overlap_start =
+            std::max(0.0, std::min(t0, t1));
+        const double overlap_end =
+            std::min(1.0, std::max(t0, t1));
+        if (overlap_start <= overlap_end + kIntersectionTolerance) {
+            parameters.push_back(overlap_start);
+            parameters.push_back(overlap_end);
+        }
+    }
+}
+
+}  // namespace
+
+// ========== 线段是否穿过孔洞内部（精确边界求交）==========
 bool segmentCrossesHole(double x0, double y0, double x1, double y1,
                         const std::vector<f2c::types::LinearRing>& hole_rings,
                         int num_samples)
 {
-    if (hole_rings.empty() || num_samples <= 0) return false;
+    static_cast<void>(num_samples);  // 兼容旧调用；判定不再依赖采样密度。
+    for (const auto& hole : hole_rings) {
+        if (uniqueRingVertexCount(hole) < 3) continue;
+        std::vector<double> parameters {0.0, 1.0};
+        appendIntersectionParameters(
+            x0, y0, x1, y1, hole, parameters);
+        std::sort(parameters.begin(), parameters.end());
+        parameters.erase(std::unique(
+            parameters.begin(), parameters.end(),
+            [](double lhs, double rhs) {
+                return std::abs(lhs - rhs) <= kIntersectionTolerance;
+            }), parameters.end());
 
-    for (int k = 0; k <= num_samples; ++k) {
-        double t = static_cast<double>(k) / num_samples;
-        double sx = x0 + t * (x1 - x0);
-        double sy = y0 + t * (y1 - y0);
-        if (pointInAnyHole(sx, sy, hole_rings)) {
-            return true;
+        for (size_t i = 0; i + 1 < parameters.size(); ++i) {
+            if (parameters[i + 1] - parameters[i] <=
+                kIntersectionTolerance) {
+                continue;
+            }
+            const double midpoint =
+                0.5 * (parameters[i] + parameters[i + 1]);
+            const double x = x0 + midpoint * (x1 - x0);
+            const double y = y0 + midpoint * (y1 - y0);
+            if (pointStrictlyInsideRing(x, y, hole)) return true;
         }
     }
     return false;

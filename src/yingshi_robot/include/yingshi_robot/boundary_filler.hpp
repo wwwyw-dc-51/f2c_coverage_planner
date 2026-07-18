@@ -66,7 +66,7 @@ bool pointInPolygon(double px, double py, const f2c::types::LinearRing& ring);
 bool pointInAnyHole(double px, double py,
                     const std::vector<f2c::types::LinearRing>& hole_rings);
 
-// 线段是否穿过孔洞（采样检测）
+// 线段是否穿过孔洞内部（精确边界求交）；末参数仅为旧调用兼容。
 bool segmentCrossesHole(double x0, double y0, double x1, double y1,
                         const std::vector<f2c::types::LinearRing>& hole_rings,
                         int num_samples = 10);
