@@ -2368,6 +2368,18 @@ private:
                     return;
                 }
 
+                if (no_hl.size() == 1 && swaths_by_cells.size() == 1) {
+                    const size_t rebalanced_swaths =
+                        yingshi::rebalanceNarrowCellSwaths(
+                            swaths_by_cells.at(0), no_hl.getGeometry(0),
+                            coverage_width_);
+                    if (rebalanced_swaths > 0) {
+                        RCLCPP_INFO(this->get_logger(),
+                            "Narrow Cell swaths rebalanced: %zu removed",
+                            rebalanced_swaths);
+                    }
+                }
+
                 const size_t pruned_seam_fills =
                     yingshi::pruneRedundantCellSeamFills(
                         swaths_by_cells, no_hl, cell, coverage_width_);

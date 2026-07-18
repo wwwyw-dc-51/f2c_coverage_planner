@@ -26,6 +26,14 @@ void fillBoundaryGaps(
     double shrink_dist,
     double robot_half_width = 0.0);
 
+// 单 Cell 窄矩形中，边界补线可能与 F2C 主 swath 近重合。
+// 将这类轨迹重排为边界锚定的等距 swath，在不留下覆盖间隙的前提下
+// 删除冗余轨迹。非矩形、宽区域或没有近重合线时不做修改。
+size_t rebalanceNarrowCellSwaths(
+    f2c::types::Swaths& swaths,
+    const f2c::types::Cell& cell,
+    double coverage_width);
+
 // 按端点分别计算外边界/孔洞净空并调整 swath，避免中点靠近孔洞时
 // 错误地同时缩短两个远离孔洞的安全端点。
 f2c::types::Swath adjustSwathEndpointsForBoundaryClearance(

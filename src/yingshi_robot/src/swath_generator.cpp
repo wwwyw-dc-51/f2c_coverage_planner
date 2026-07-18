@@ -366,6 +366,11 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
         }
     }
 
+    if (no_hl.size() == 1 && swaths_by_cells.size() == 1) {
+        rebalanceNarrowCellSwaths(
+            swaths_by_cells.at(0), no_hl.getGeometry(0), coverage_width);
+    }
+
     return swaths_by_cells;
 }
 

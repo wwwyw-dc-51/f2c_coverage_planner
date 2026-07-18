@@ -665,6 +665,161 @@ void fillBoundaryGaps(
     }
 }
 
+size_t rebalanceNarrowCellSwaths(
+    f2c::types::Swaths& swaths,
+    const f2c::types::Cell& cell,
+    double coverage_width)
+{
+    if (swaths.size() < 4 || coverage_width <= 0.0 || cell.size() != 1) {
+        return 0;
+    }
+
+    const auto& ring = cell.getExteriorRing();
+    if (ring.size() != 5) return 0;
+
+    const auto& first = swaths.at(0);
+    const double first_dx = first.endPoint().getX() - first.startPoint().getX();
+    const double first_dy = first.endPoint().getY() - first.startPoint().getY();
+    const double first_length = std::hypot(first_dx, first_dy);
+    if (first_length < coverage_width) return 0;
+
+    const double dir_x = first_dx / first_length;
+    const double dir_y = first_dy / first_length;
+    const double normal_x = -dir_y;
+    const double normal_y = dir_x;
+
+    size_t parallel_edges = 0;
+    size_t normal_edges = 0;
+    for (size_t edge_index = 0; edge_index + 1 < ring.size(); ++edge_index) {
+        const double edge_dx =
+            ring.getGeometry(edge_index + 1).getX() -
+            ring.getGeometry(edge_index).getX();
+        const double edge_dy =
+            ring.getGeometry(edge_index + 1).getY() -
+            ring.getGeometry(edge_index).getY();
+        const double edge_length = std::hypot(edge_dx, edge_dy);
+        if (edge_length < 1e-9) return 0;
+        const double alignment = std::abs(
+            (edge_dx * dir_x + edge_dy * dir_y) / edge_length);
+        if (alignment >= 0.999) {
+            ++parallel_edges;
+        } else if (alignment <= 0.045) {
+            ++normal_edges;
+        } else {
+            return 0;
+        }
+    }
+    if (parallel_edges != 2 || normal_edges != 2) return 0;
+
+    std::vector<double> projections;
+    projections.reserve(swaths.size());
+    double min_length = std::numeric_limits<double>::max();
+    double max_length = 0.0;
+    for (size_t swath_index = 0; swath_index < swaths.size(); ++swath_index) {
+        const auto& swath = swaths.at(swath_index);
+        const double dx = swath.endPoint().getX() - swath.startPoint().getX();
+        const double dy = swath.endPoint().getY() - swath.startPoint().getY();
+        const double length = std::hypot(dx, dy);
+        if (length < coverage_width) return 0;
+        const double alignment = std::abs(
+            (dx * dir_x + dy * dir_y) / length);
+        if (alignment < 0.999) return 0;
+
+        min_length = std::min(min_length, length);
+        max_length = std::max(max_length, length);
+        const double mid_x = 0.5 * (
+            swath.startPoint().getX() + swath.endPoint().getX());
+        const double mid_y = 0.5 * (
+            swath.startPoint().getY() + swath.endPoint().getY());
+        projections.push_back(mid_x * normal_x + mid_y * normal_y);
+    }
+    if (max_length - min_length > coverage_width * 0.25) return 0;
+
+    const auto [min_projection_it, max_projection_it] =
+        std::minmax_element(projections.begin(), projections.end());
+    const double min_projection = *min_projection_it;
+    const double max_projection = *max_projection_it;
+    const double projection_span = max_projection - min_projection;
+    if (projection_span <= coverage_width ||
+        projection_span > 3.0 * coverage_width) {
+        return 0;
+    }
+
+    double cell_projection_min = std::numeric_limits<double>::max();
+    double cell_projection_max = -std::numeric_limits<double>::max();
+    for (size_t point_index = 0; point_index + 1 < ring.size(); ++point_index) {
+        const auto point = ring.getGeometry(point_index);
+        const double projection =
+            point.getX() * normal_x + point.getY() * normal_y;
+        cell_projection_min = std::min(cell_projection_min, projection);
+        cell_projection_max = std::max(cell_projection_max, projection);
+    }
+    const double half_coverage = 0.5 * coverage_width;
+    if (min_projection - cell_projection_min > half_coverage + 1e-6 ||
+        cell_projection_max - max_projection > half_coverage + 1e-6) {
+        return 0;
+    }
+
+    std::vector<double> sorted_projections = projections;
+    std::sort(sorted_projections.begin(), sorted_projections.end());
+    double minimum_gap = std::numeric_limits<double>::max();
+    for (size_t index = 1; index < sorted_projections.size(); ++index) {
+        minimum_gap = std::min(
+            minimum_gap,
+            sorted_projections[index] - sorted_projections[index - 1]);
+    }
+    if (minimum_gap >= coverage_width * 0.25) return 0;
+
+    const size_t target_count = static_cast<size_t>(
+        std::ceil(projection_span / coverage_width)) + 1;
+    if (target_count >= swaths.size() || target_count < 2) return 0;
+
+    double along_min = std::numeric_limits<double>::max();
+    double along_max = -std::numeric_limits<double>::max();
+    for (size_t point_index = 0; point_index + 1 < ring.size(); ++point_index) {
+        const auto& point = ring.getGeometry(point_index);
+        const double along = point.getX() * dir_x + point.getY() * dir_y;
+        along_min = std::min(along_min, along);
+        along_max = std::max(along_max, along);
+    }
+
+    const bool starts_at_max =
+        std::abs(projections.front() - max_projection) <
+        std::abs(projections.front() - min_projection);
+    const double projection_step =
+        projection_span / static_cast<double>(target_count - 1);
+    f2c::types::Swaths rebalanced;
+    for (size_t index = 0; index < target_count; ++index) {
+        const double projection = starts_at_max
+            ? max_projection - projection_step * index
+            : min_projection + projection_step * index;
+        const f2c::types::Point low(
+            dir_x * along_min + normal_x * projection,
+            dir_y * along_min + normal_y * projection);
+        const f2c::types::Point high(
+            dir_x * along_max + normal_x * projection,
+            dir_y * along_max + normal_y * projection);
+
+        f2c::types::LineString line;
+        if (index % 2 == 0) {
+            line.addPoint(low);
+            line.addPoint(high);
+        } else {
+            line.addPoint(high);
+            line.addPoint(low);
+        }
+        const auto& source = swaths.at(std::min(index, swaths.size() - 1));
+        f2c::types::Swath rebalanced_swath(
+            line, coverage_width, source.getId(), source.getType());
+        rebalanced_swath.setCreationDir(source.getCreationDir());
+        rebalanced.push_back(rebalanced_swath);
+    }
+
+    const size_t removed_count = swaths.size() - rebalanced.size();
+    swaths = rebalanced;
+    return removed_count;
+}
+
 size_t pruneRedundantCellSeamFills(
     f2c::types::SwathsByCells& swaths_by_cells,
     const f2c::types::Cells& cells,

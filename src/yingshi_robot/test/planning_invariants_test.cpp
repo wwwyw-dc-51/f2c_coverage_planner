@@ -405,6 +405,27 @@ TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
     EXPECT_TRUE(found_right_boundary_fill);
 }
 
+TEST(BoundaryFill, RebalancesNearCoincidentSwathsInASingleNarrowRectangle)
+{
+    const auto corridor = makeRectangle(0.15, 0.15, 1.85, 19.85);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(1.55, 19.85, 1.55, 0.15, 0.90));
+    swaths.push_back(makeSwath(1.46, 0.15, 1.46, 19.85, 0.90));
+    swaths.push_back(makeSwath(0.587, 19.85, 0.587, 0.15, 0.90));
+    swaths.push_back(makeSwath(0.45, 0.15, 0.45, 19.85, 0.90));
+
+    EXPECT_EQ(
+        yingshi::rebalanceNarrowCellSwaths(swaths, corridor, 0.90), 1U);
+
+    ASSERT_EQ(swaths.size(), 3U);
+    EXPECT_NEAR(swaths.at(0).startPoint().getX(), 1.55, 1e-9);
+    EXPECT_NEAR(swaths.at(1).startPoint().getX(), 1.00, 1e-9);
+    EXPECT_NEAR(swaths.at(2).startPoint().getX(), 0.45, 1e-9);
+    EXPECT_GT(swaths.at(0).startPoint().getY(), swaths.at(0).endPoint().getY());
+    EXPECT_LT(swaths.at(1).startPoint().getY(), swaths.at(1).endPoint().getY());
+    EXPECT_GT(swaths.at(2).startPoint().getY(), swaths.at(2).endPoint().getY());
+}
+
 TEST(RouteInvariant, AppendedBoundarySwathStartsANewConnectedGroup)
 {
     f2c::types::Route route;
