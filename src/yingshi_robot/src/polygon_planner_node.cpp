@@ -2314,7 +2314,7 @@ private:
                         // 边界间隙填补：filterShortSwaths 之后补，避免填缝被 min_swath_length 误杀
                         size_t sz_before = cs.size();
                         fillBoundaryGaps(cs, no_hl.getGeometry(ci), cell, best_ang,
-                            r_w, swath_endpoint_shrink_distance_);
+                            coverage_width_, swath_endpoint_shrink_distance_);
                         if (cs.size() > sz_before) {
                             RCLCPP_INFO(this->get_logger(),
                                 "  Boundary fill: cell[%zu] +%zu swaths (%zu→%zu)",
@@ -2351,7 +2351,9 @@ private:
                         size_t rm = 0;
                         cs = filterShortSwaths(cs, min_swath_length_, rm);
                         size_t sz_before = cs.size();
-                        fillBoundaryGaps(cs, sub, cell, ang, r_w, swath_endpoint_shrink_distance_);
+                        fillBoundaryGaps(
+                            cs, sub, cell, ang, coverage_width_,
+                            swath_endpoint_shrink_distance_);
                         if (cs.size() > sz_before) {
                             RCLCPP_INFO(this->get_logger(),
                                 "  Boundary fill: cell[%zu] +%zu swaths (%zu→%zu)",
@@ -2368,7 +2370,7 @@ private:
 
                 const size_t pruned_seam_fills =
                     yingshi::pruneRedundantCellSeamFills(
-                        swaths_by_cells, no_hl, cell, r_w);
+                        swaths_by_cells, no_hl, cell, coverage_width_);
                 if (pruned_seam_fills > 0) {
                     RCLCPP_INFO(this->get_logger(),
                         "Redundant Cell seam fills removed: %zu",

@@ -333,8 +333,10 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                 size_t rm = 0;
                 f2c::types::Swaths cs = filterShortSwaths(
                     cell_swaths, min_swath_length, rm);
-                fillBoundaryGaps(cs, no_hl.getGeometry(ci), full_polygon,
-                                 best_ang, r_w, swath_endpoint_shrink_distance);
+                fillBoundaryGaps(
+                    cs, no_hl.getGeometry(ci), full_polygon,
+                    best_ang, coverage_width,
+                    swath_endpoint_shrink_distance);
                 if (cs.size() > 0) swaths_by_cells.push_back(cs);
             }
         }
@@ -357,8 +359,9 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
             }
             size_t rm = 0;
             cs = filterShortSwaths(cs, min_swath_length, rm);
-            fillBoundaryGaps(cs, sub, full_polygon, ang,
-                             r_w, swath_endpoint_shrink_distance);
+            fillBoundaryGaps(
+                cs, sub, full_polygon, ang, coverage_width,
+                swath_endpoint_shrink_distance);
             if (cs.size() > 0) swaths_by_cells.push_back(cs);
         }
     }

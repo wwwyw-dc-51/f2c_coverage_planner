@@ -175,7 +175,7 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
 
         // ── 4. 去重接缝补线 ──
         pruneRedundantCellSeamFills(
-            swaths_by_cells, no_hl, req.polygon, r_w);
+            swaths_by_cells, no_hl, req.polygon, req.coverage_width);
 
         // ── 5. 孔洞裁剪 ──
         // （当前未实现 standalone splitSwathsCrossingHoles；

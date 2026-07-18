@@ -6,6 +6,7 @@
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_planner.hpp"
+#include "yingshi_robot/swath_generator.hpp"
 
 namespace {
 
@@ -369,6 +370,39 @@ TEST(BoundaryFill, KeepsSeamFillWhenCommonCoverageMissesOneEndpoint)
     EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
         swaths_by_cells, cells, full_polygon, 0.90), 0U);
     EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
+}
+
+TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 2.0, 20.0);
+    f2c::types::Cells cells;
+    cells.addGeometry(full_polygon);
+
+    const auto generated = yingshi::generateSwathsForAllCells(
+        cells,
+        full_polygon,
+        0.873,
+        0.90,
+        0.0,
+        0.5,
+        true,
+        {0.5 * std::acos(-1.0)});
+
+    bool found_left_boundary_fill = false;
+    bool found_right_boundary_fill = false;
+    for (size_t cell_index = 0; cell_index < generated.size(); ++cell_index) {
+        const auto& swaths = generated.at(cell_index);
+        for (size_t swath_index = 0; swath_index < swaths.size(); ++swath_index) {
+            const auto& swath = swaths.at(swath_index);
+            const double mid_x = 0.5 * (
+                swath.startPoint().getX() + swath.endPoint().getX());
+            found_left_boundary_fill |= std::abs(mid_x - 0.45) < 1e-6;
+            found_right_boundary_fill |= std::abs(mid_x - 1.55) < 1e-6;
+        }
+    }
+
+    EXPECT_TRUE(found_left_boundary_fill);
+    EXPECT_TRUE(found_right_boundary_fill);
 }
 
 TEST(RouteInvariant, AppendedBoundarySwathStartsANewConnectedGroup)
