@@ -2,10 +2,10 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>yingshi_robot</name>
-  <version>0.0.1</version>
-  <description>Minimal F2C coverage planner RViz demo.</description>
-  <maintainer email="student@example.com">student</maintainer>
-  <license>TODO</license>
+  <version>9.7.0</version>
+  <description>ROS 2 full-coverage path planner with PlannerCore, C-space traversability analysis, RViz visualization, and batch quality gates.</description>
+  <maintainer email="1901533086@qq.com">dc</maintainer>
+  <license file="LICENSE">LicenseRef-Proprietary</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
