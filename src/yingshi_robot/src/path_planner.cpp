@@ -610,7 +610,7 @@ void greedyCellOrder(
         if (segmentCrossesHole(
                 from_x, from_y, target.getX(), target.getY(),
                 hole_rings, 20)) {
-            cost += 1000.0;
+            cost += 1e9;  // 硬约束：视穿洞连接为不可行
         }
         return cost;
     };

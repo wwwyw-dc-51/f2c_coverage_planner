@@ -2,10 +2,10 @@
 # F2C 一站式开发工作流
 # 用法:
 #   ./sync_and_build.sh                      # 仅同步+编译
-#   ./sync_and_build.sh --test [scenario]    # 同步+编译+跑单场景（默认 notched）
-#   ./sync_and_build.sh --batch              # 同步+编译+6场景批量测试+渲染+拉回结果
+#   ./sync_and_build.sh --test [scenario]    # 同步+编译+跑单场景（默认 S8）
+#   ./sync_and_build.sh --batch              # 同步+编译+8场景批量测试+渲染+拉回结果
 #   ./sync_and_build.sh --compare            # 同步+编译+S3/S4/S6 自定义 vs Snake 对比
-#   ./sync_and_build.sh --run                # 同步+编译+远程启动 notched RViz 演示
+#   ./sync_and_build.sh --run                # 同步+编译+远程启动 S8 RViz 演示
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,7 @@ RESULT_BASE="$PROJECT_ROOT/test_results"
 
 # 场景映射
 declare -A SCENARIOS=(
-    ["notched"]="${WS}/src/yingshi_robot/config/f2c_areas/notched_10m_with_center_hole.yaml"
+    ["S8"]="${WS}/src/yingshi_robot/config/f2c_areas/notched_10m_with_center_hole.yaml"
     ["S1"]="${WS}/src/yingshi_robot/test_polygons/S1_S1_convex_rect.yaml"
     ["S2"]="${WS}/src/yingshi_robot/test_polygons/S2_S2_L_shaped.yaml"
     ["S3"]="${WS}/src/yingshi_robot/test_polygons/S3_S3_with_holes.yaml"
@@ -67,7 +67,7 @@ echo "   $(echo "$BUILD_OUT" | grep 'Summary' || echo 'Done')"
 
 # ── 解析命令行 ──
 MODE="${1:-}"
-SCENARIO="${2:-notched}"
+SCENARIO="${2:-S8}"
 
 # ── Mode: --test ──
 if [[ "$MODE" == "--test" ]]; then
@@ -78,7 +78,7 @@ if [[ "$MODE" == "--test" ]]; then
 # ── Mode: --batch ──
 elif [[ "$MODE" == "--batch" ]]; then
     echo ""
-    echo "📊 Batch testing 6 scenarios..."
+    echo "📊 Batch testing 8 scenarios..."
     TIMESTAMP=$(date +%m%d_%H%M)
     VM_RESULT="$WS/test_results/batch_${TIMESTAMP}"
     mkdir -p "$RESULT_BASE/batch_${TIMESTAMP}"
@@ -121,7 +121,7 @@ elif [[ "$MODE" == "--compare" ]]; then
 # ── Mode: --run ──
 elif [[ "$MODE" == "--run" ]]; then
     echo ""
-    echo "🚀 Launching notched scenario on VM..."
+    echo "🚀 Launching S8 scenario on VM..."
     echo "   (Press Ctrl-C in VM terminal to stop)"
     ssh -t "${VM_HOST}" "
         source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
@@ -135,8 +135,8 @@ else
     echo "✅ Sync + build done."
     echo ""
     echo "Usage:"
-    echo "  ./sync_and_build.sh --test [notched|S1-S6]   # 单场景快速测试"
-    echo "  ./sync_and_build.sh --batch                    # 6场景批量测试+渲染"
+    echo "  ./sync_and_build.sh --test [S1-S8]   # 单场景快速测试"
+    echo "  ./sync_and_build.sh --batch                    # 8场景批量测试+渲染"
     echo "  ./sync_and_build.sh --compare                  # 自定义 vs Snake 对比"
-    echo "  ./sync_and_build.sh --run                      # 启动 notched RViz"
+    echo "  ./sync_and_build.sh --run                      # 启动 S8 RViz"
 fi
