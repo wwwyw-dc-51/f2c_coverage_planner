@@ -2602,18 +2602,7 @@ private:
                 no_hl = simplifyCells(no_hl, 5.0, 0.5);
             }
 
-            // ── 优化步骤：过滤微小子区域 ──
-            if (use_optimized_planner_ && filter_tiny_cells_) {
-                double min_cell_area = min_cell_area_ratio_ * coverage_width_ * robot_width_;
-                RCLCPP_INFO(this->get_logger(),
-                           "Opt: Filtering tiny cells (min_area=%.3f m² = %.1f × %.2f × %.2f)...",
-                           min_cell_area, min_cell_area_ratio_, coverage_width_, robot_width_);
-                no_hl = filterTinyCells(no_hl, min_cell_area);
-                RCLCPP_INFO(this->get_logger(),
-                           "After tiny cell filter: %zu sub-cells remain", no_hl.size());
-            }
-
-            // ── Cell 合并：两条管线共用同一套几何策略 ──
+            // ── Cell 合并：先合并同向 cell（让微 cell 有机会被邻居吸收），再过滤孤立碎 cell ──
             if (use_optimized_planner_ && no_hl.size() > 1) {
                 const size_t cell_count_before = no_hl.size();
                 const double merge_angle_threshold =
@@ -2629,6 +2618,17 @@ private:
                         cell_count_before, no_hl.size(),
                         merge_result.merged_count, merge_angle_threshold);
                 }
+            }
+
+            // ── 优化步骤：过滤孤立微小子区域 ──
+            if (use_optimized_planner_ && filter_tiny_cells_) {
+                double min_cell_area = min_cell_area_ratio_ * coverage_width_ * robot_width_;
+                RCLCPP_INFO(this->get_logger(),
+                           "Opt: Filtering tiny cells (min_area=%.3f m² = %.1f × %.2f × %.2f)...",
+                           min_cell_area, min_cell_area_ratio_, coverage_width_, robot_width_);
+                no_hl = filterTinyCells(no_hl, min_cell_area);
+                RCLCPP_INFO(this->get_logger(),
+                           "After tiny cell filter: %zu sub-cells remain", no_hl.size());
             }
 
             // ── 孔洞几何挖除：仅 W1 需要（网格分解 W2 已通过网格线自然避开）──
