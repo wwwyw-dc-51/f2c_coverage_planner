@@ -306,9 +306,9 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
             [](double a, double b) { return std::abs(a-b) < 1e-4; }),
             cands.end());
 
+        double best_ang = 0.0;  // 提升作用域，用于离群 veto
         if (!cands.empty()) {
             size_t best_total = std::numeric_limits<size_t>::max();
-            double best_ang = 0.0;
             std::vector<f2c::types::Swaths> best_cell_swaths;
             best_cell_swaths.reserve(no_hl.size());
 
@@ -346,6 +346,65 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                     swath_endpoint_shrink_distance, 0.0,
                     boundary_fill_offset);
                 swaths_by_cells.push_back(cs);
+            }
+
+            // ★ 方向 B：全局收边 + per-cell 离群 veto
+            // 全局角度选定后逐 cell 检查该角度是否对该 cell 离群
+            if (swaths_by_cells.size() > 0) {
+                for (size_t ci = 0; ci < no_hl.size(); ++ci) {
+                    const auto& cell = no_hl.getGeometry(ci);
+                    size_t global_cnt = swaths_by_cells.at(ci).size();
+                    if (global_cnt == 0) continue;
+
+                    // 1. 计算该 cell 的本地最优角度
+                    double local_ang = computeCellMainDirection(cell);
+                    if (use_sweep_decomp && full_polygon.size() > 0) {
+                        double slant_ang = detectSlantedBoundaryAngle(
+                            cell, full_polygon, local_ang, coverage_width);
+                        if (std::abs(slant_ang - local_ang) > 0.05) {
+                            local_ang = slant_ang;
+                        }
+                    }
+
+                    // 2. 在本地候选角度中选最少 swath 数
+                    std::vector<double> local_cands;
+                    auto edge_angs = extractEdgeAngles(cell, 2.0);
+                    local_cands.insert(local_cands.end(),
+                        edge_angs.begin(), edge_angs.end());
+                    for (double a : swath_angle_candidates) {
+                        local_cands.push_back(a);
+                    }
+                    local_cands.push_back(local_ang);
+
+                    auto local_swaths = optimizeSwathAngle(
+                        cell, swath_gen, r_w, local_cands);
+                    size_t local_best = local_swaths.size();
+
+                    // 3. 角度偏差 guard：本地最优角偏离全局 > 30° 时不 override
+                    //    防止 cell 间方向不一致导致连接段混乱
+                    double ang_diff = std::abs(local_ang - best_ang);
+                    if (ang_diff > M_PI / 2.0) ang_diff = M_PI - ang_diff;
+                    if (ang_diff > M_PI / 6.0) continue;  // > 30°
+
+                    // 4. 离群判断：有孔洞场景收紧 veto 门槛，减少角度变更导致的穿洞风险
+                    bool has_holes = (full_polygon.size() > 1);
+                    double outlier_multiplier = has_holes ? 3.0 : 2.0;
+                    int outlier_min_extra = has_holes ? 5 : 3;
+                    if (local_best > 0
+                        && global_cnt > local_best * outlier_multiplier
+                        && static_cast<int>(global_cnt - local_best) >= outlier_min_extra) {
+                        auto cs = local_swaths;
+                        fillBoundaryGaps(cs, cell, full_polygon,
+                            local_ang, coverage_width,
+                            swath_endpoint_shrink_distance, 0.0,
+                            boundary_fill_offset);
+                        size_t rm = 0;
+                        cs = filterShortSwaths(cs, min_swath_length, rm);
+                        if (cs.size() > 0) {
+                            swaths_by_cells.at(ci) = cs;
+                        }
+                    }
+                }
             }
         }
     }

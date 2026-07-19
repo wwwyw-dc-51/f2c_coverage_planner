@@ -291,13 +291,35 @@ size_t repairRouteConnectionsAroundHoles(
             }
         }
 
-        bool repaired = false;
-        const auto repaired_points =
-            repairConnectionPolyline(points, avoidance_rings, repaired);
-        if (!repaired) continue;
+        // 迭代修复：修复后的连接可能仍然穿洞（绕行路径穿过其他孔洞），
+        // 最多重试 3 次以确保复杂多孔洞场景的连接全部修复。
+        for (int iter = 0; iter < 3; ++iter) {
+            bool repaired = false;
+            auto repaired_points =
+                repairConnectionPolyline(points, avoidance_rings, repaired);
+            if (!repaired) break;
+
+            // 检查修复结果是否仍有穿洞段
+            bool still_crosses = false;
+            for (size_t i = 1; i < repaired_points.size(); ++i) {
+                if (segmentCrossesHole(
+                        repaired_points[i-1].getX(), repaired_points[i-1].getY(),
+                        repaired_points[i].getX(), repaired_points[i].getY(),
+                        hole_rings, 20)) {
+                    still_crosses = true;
+                    break;
+                }
+            }
+
+            points = repaired_points;
+            if (!still_crosses) break;  // 修复成功
+            // 仍有穿洞段，继续下一轮迭代
+        }
+
+        if (points.size() < 2) continue;
 
         f2c::types::MultiPoint repaired_connection;
-        for (const auto& point : repaired_points) {
+        for (const auto& point : points) {
             repaired_connection.addPoint(point);
         }
         route.setConnection(connection_idx, repaired_connection);
@@ -610,7 +632,7 @@ void greedyCellOrder(
         if (segmentCrossesHole(
                 from_x, from_y, target.getX(), target.getY(),
                 hole_rings, 20)) {
-            cost += 1000.0;
+            cost += 1e9;  // 硬约束：视穿洞连接为不可行
         }
         return cost;
     };
