@@ -446,7 +446,114 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
             swaths_by_cells.at(0), no_hl.getGeometry(0), coverage_width);
     }
 
+    // ── 孔洞端点安全收缩 ──
+    // swath 端点贴孔洞边界会导致下游连接修复沿孔洞走，
+    // 内缩端点留出转向空间，让 connection repair 有操作余地。
+    if (full_polygon.size() > 1) {
+        shrinkSwathEndpointsFromHoles(
+            swaths_by_cells, full_polygon, r_w * 0.25);
+    }
+
     return swaths_by_cells;
+}
+
+// ========== 孔洞端点安全收缩 ==========
+// 对每个 swath 端点检查到孔洞边缘的最小距离，
+// 若小于 hole_clearance 则沿 swath 方向向内收缩至安全距离。
+void shrinkSwathEndpointsFromHoles(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const f2c::types::Cell& full_polygon,
+    double hole_clearance)
+{
+    if (hole_clearance <= 0.0) return;
+    if (full_polygon.size() <= 1) return;  // 无孔洞
+
+    // 收集所有孔洞环
+    std::vector<const f2c::types::LinearRing*> hole_rings;
+    for (size_t hi = 0; hi + 1 < full_polygon.size(); ++hi) {
+        hole_rings.push_back(&full_polygon.getInteriorRing(hi));
+    }
+    if (hole_rings.empty()) return;
+
+    for (size_t ci = 0; ci < swaths_by_cells.size(); ++ci) {
+        auto& cell_swaths = swaths_by_cells.at(ci);
+        for (size_t si = 0; si < cell_swaths.size(); ++si) {
+            auto& swath = cell_swaths.at(si);
+            double sx = swath.startPoint().getX();
+            double sy = swath.startPoint().getY();
+            double ex = swath.endPoint().getX();
+            double ey = swath.endPoint().getY();
+            double swath_len = std::hypot(ex - sx, ey - sy);
+            if (swath_len < 1e-9) continue;
+
+            double unit_dx = (ex - sx) / swath_len;
+            double unit_dy = (ey - sy) / swath_len;
+
+            // 对起点和终点分别检查
+            for (int ep = 0; ep < 2; ++ep) {
+                double px = (ep == 0) ? sx : ex;
+                double py = (ep == 0) ? sy : ey;
+
+                // 计算端点到最近孔洞边缘的距离
+                double min_dist = std::numeric_limits<double>::max();
+                for (const auto* ring : hole_rings) {
+                    for (size_t vi = 0; vi + 1 < ring->size(); ++vi) {
+                        double ax = ring->getGeometry(vi).getX();
+                        double ay = ring->getGeometry(vi).getY();
+                        double bx = ring->getGeometry(vi + 1).getX();
+                        double by = ring->getGeometry(vi + 1).getY();
+
+                        double edx = bx - ax, edy = by - ay;
+                        double ed_len2 = edx * edx + edy * edy;
+                        if (ed_len2 < 1e-12) {
+                            min_dist = std::min(min_dist,
+                                std::hypot(px - ax, py - ay));
+                            continue;
+                        }
+                        double t = ((px - ax) * edx + (py - ay) * edy) / ed_len2;
+                        t = std::max(0.0, std::min(1.0, t));
+                        double nx = ax + t * edx;
+                        double ny = ay + t * edy;
+                        min_dist = std::min(min_dist, std::hypot(px - nx, py - ny));
+                    }
+                }
+
+                // 若距离不足，向内收缩
+                if (min_dist < hole_clearance) {
+                    double shrink = hole_clearance - min_dist;
+                    // 起点向内（+方向），终点向内（-方向）
+                    double sign = (ep == 0) ? 1.0 : -1.0;
+                    double new_px = px + sign * shrink * unit_dx;
+                    double new_py = py + sign * shrink * unit_dy;
+
+                    // 确保收缩后 swath 仍然有效（两端距离 > 0）
+                    double other_px = (ep == 0) ? ex : sx;
+                    double other_py = (ep == 0) ? ey : sy;
+                    double new_len = std::hypot(new_px - other_px, new_py - other_py);
+                    if (new_len < 0.10) continue;  // 太短，跳过
+
+                    if (ep == 0) {
+                        sx = new_px; sy = new_py;
+                    } else {
+                        ex = new_px; ey = new_py;
+                    }
+                }
+            }
+
+            // 写回修改后的 swath
+            if (std::abs(sx - swath.startPoint().getX()) > 1e-9 ||
+                std::abs(sy - swath.startPoint().getY()) > 1e-9 ||
+                std::abs(ex - swath.endPoint().getX()) > 1e-9 ||
+                std::abs(ey - swath.endPoint().getY()) > 1e-9) {
+                f2c::types::LineString new_path;
+                new_path.addPoint(f2c::types::Point(sx, sy));
+                new_path.addPoint(f2c::types::Point(ex, ey));
+                f2c::types::Swath adjusted(new_path, swath.getWidth(),
+                    swath.getId(), swath.getType());
+                cell_swaths.at(si) = adjusted;
+            }
+        }
+    }
 }
 
 }  // namespace yingshi

@@ -72,4 +72,13 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
     double boundary_fill_offset = -1.0,
     bool use_sweep_decomp = false);
 
+// ========== 孔洞端点安全收缩 ==========
+// 对 swaths_by_cells 中每个 swath 端点检查到孔洞边缘的最小距离，
+// 若小于 hole_clearance 则沿 swath 方向向内收缩至安全距离。
+// 防止下游连接修复沿孔洞边界走产生贴边路径。
+void shrinkSwathEndpointsFromHoles(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const f2c::types::Cell& full_polygon,
+    double hole_clearance);
+
 }  // namespace yingshi
