@@ -22,7 +22,7 @@ declare -A SCENARIOS=(
     ["S4"]="$TEST_POLYGONS/S4_S4_narrow_corridor.yaml"
     ["S5"]="$TEST_POLYGONS/S5_S5_irregular.yaml"
     ["S6"]="$TEST_POLYGONS/S6_S6_multi_region.yaml"
-    ["notched"]="$F2C_AREAS/notched_10m_with_center_hole.yaml"
+    ["S8"]="$F2C_AREAS/notched_10m_with_center_hole.yaml"
     ["S7"]="$TEST_POLYGONS/S7_S7_factory_workshop.yaml"
 )
 
@@ -77,7 +77,7 @@ COVERAGE_THRESHOLD=0.99  # 产品验收门槛 99%
 VIS_JSON="/tmp/f2c_vis_polygon_1.json"
 GRID_JSON="/tmp/f2c_grid_polygon_1.json"
 
-for NAME in S1 S2 S3 S4 S5 S6 S7 notched; do
+for NAME in S1 S2 S3 S4 S5 S6 S7 S8; do
     YAML="${SCENARIOS[$NAME]}"
     echo ""
     echo "=== [$NAME] $(date +%H:%M:%S) ==="
@@ -427,7 +427,7 @@ echo "========================================="
 cleanup_ros
 
 # 渲染所有场景
-for NAME in S1 S2 S3 S4 S5 S6 S7 notched; do
+for NAME in S1 S2 S3 S4 S5 S6 S7 S8; do
     YAML="${SCENARIOS[$NAME]}"
     DATA_FILE="$RESULT_DIR/${NAME}_data.json"
     PNG_FILE="$RESULT_DIR/${NAME}_coverage.png"
@@ -461,7 +461,7 @@ lines.append(f"生成时间: {now}")
 lines.append("")
 lines.append("| 场景 | 面积 | 覆盖率 | 修正覆盖率 | 得分 | 未覆盖 | 路径长 | 重叠率 | 耗时 |")
 lines.append("|:----:|:----:|:-----:|:--------:|:----:|:-----:|:-----:|:-----:|:---:|")
-for n in ['S1','S2','S3','S4','S5','S6','S7','notched']:
+for n in ['S1','S2','S3','S4','S5','S6','S7','S8']:
     df = f'{rd}/{n}_data.json'
     if os.path.exists(df):
         with open(df) as f:
@@ -509,5 +509,5 @@ if [ $ERRORS -gt 0 ]; then
     echo "❌ $ERRORS scenario(s) failed (crash/timeout/missing data)"
     exit 1
 fi
-echo "✅ All 7 scenarios passed, no failures."
+echo "✅ All 8 scenarios passed, no failures."
 exit 0
