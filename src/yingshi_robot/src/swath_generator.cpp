@@ -386,13 +386,9 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                     if (ang_diff > M_PI / 2.0) ang_diff = M_PI - ang_diff;
                     if (ang_diff > M_PI / 6.0) continue;  // > 30°
 
-                    // 4. 离群判断：有孔洞场景收紧 veto 门槛，减少角度变更导致的穿洞风险
-                    bool has_holes = (full_polygon.size() > 1);
-                    double outlier_multiplier = has_holes ? 3.0 : 2.0;
-                    int outlier_min_extra = has_holes ? 5 : 3;
-                    if (local_best > 0
-                        && global_cnt > local_best * outlier_multiplier
-                        && static_cast<int>(global_cnt - local_best) >= outlier_min_extra) {
+                    // 4. 离群判断：全局角度 swath 数比本地最优多 100%+ 且多至少 3 条
+                    if (local_best > 0 && global_cnt > local_best * 2.0
+                        && global_cnt - local_best >= 3) {
                         auto cs = local_swaths;
                         fillBoundaryGaps(cs, cell, full_polygon,
                             local_ang, coverage_width,
