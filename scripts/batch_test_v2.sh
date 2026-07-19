@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # F2C 8场景批量测试 v2 — 每场景独立隔离，避免 topic 串扰
-set -euo pipefail
+set -eu
 
 WS="$HOME/f2c_coverage_planner"
 RESULT_DIR="${1:-$WS/test_results/batch_$(date +%m%d_%H%M)}"
