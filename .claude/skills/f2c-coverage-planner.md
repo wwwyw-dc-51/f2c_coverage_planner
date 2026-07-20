@@ -28,6 +28,22 @@ description: >
 - 不要把 `--batch` 当调试工具用
 - 发现批测失败后，先静态分析日志和数据，定位根因再改代码
 
+### 并行与 Agent 分派
+- **批测跑着的时候别闲着**：编译/批测是 IO 密集型，后台跑。同时做代码审查、文档更新、数据分析。
+- **独立子任务用 Agent 并行**：分析多个场景的 JSON 数据、多文件代码审查、多维度问题诊断 — 这些互不依赖的工作应该用 `Agent` 工具同时派发。
+- **避免串行等待**：不要"读文件A → 等结果 → 读文件B → 等结果"。用并行 Read/Grep/Bash 一次性拉取。
+
+### JSON 数据诊断
+- 每次批测产出 `{NAME}_data.json`，包含：
+  - `path`: 完整路径点 [{x, y}, ...]
+  - `swaths`: 所有 swath 端点 [{points: [{x,y}, {x,y}]}, ...]
+  - `cells`: 分解后的 cell 几何 + 内部 swaths
+  - `connections`: cell 间连接线
+  - `eval`: 覆盖率/得分/路径长/重叠率/耗时
+  - `cspace`: 可达区域分析
+- **出问题先看 JSON，不要猜**：覆盖率下降？看 path 和 swaths 数据。边界出界？算 robot footprint vs polygon。swath 角度不对？检查 swaths 中每条线的方向。
+- JSON 在 VM 上，用 `ssh dc@192.168.83.129 "python3 -c '...' " ` 直接分析，不需要拉回本地。
+
 ### VM 环境
 - **VM IP**: `192.168.83.129` (VMware, 用户 `dc`)
 - **同步+编译**: `bash scripts/sync_and_build.sh`
