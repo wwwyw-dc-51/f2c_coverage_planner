@@ -528,4 +528,81 @@ std::vector<double> extractDecompositionAngles(
     return decomp_angles;
 }
 
+// ── Sweep 分解条带合并：合并同 x-span 的相邻条带 ──
+// sweep 分解用所有孔洞顶点 Y 坐标做水平切割线，
+// 会把同一条带区域切成多段。此函数将这些碎片重新合并。
+f2c::types::Cells mergeAdjacentSweepStrips(
+    const f2c::types::Cells& cells,
+    double coverage_width)
+{
+    if (cells.size() <= 1) return cells;
+
+    const size_t n = cells.size();
+    constexpr double kXSpanTol = 0.05;  // 5cm x-span 匹配容差
+
+    // 计算每个 cell 的 x-span
+    struct Span { double xmin, xmax, ymin, ymax; };
+    std::vector<Span> spans(n);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& ring = cells.getGeometry(i).getExteriorRing();
+        double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
+        for (size_t j = 0; j + 1 < ring.size(); ++j) {
+            double x = ring.getGeometry(j).getX();
+            double y = ring.getGeometry(j).getY();
+            xmin = std::min(xmin, x); xmax = std::max(xmax, x);
+            ymin = std::min(ymin, y); ymax = std::max(ymax, y);
+        }
+        spans[i] = {xmin, xmax, ymin, ymax};
+    }
+
+    // Union-find on same-x-span, vertically adjacent cells
+    std::vector<size_t> parent(n);
+    for (size_t i = 0; i < n; ++i) parent[i] = i;
+    auto find = [&](size_t x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    auto unite = [&](size_t a, size_t b) {
+        a = find(a); b = find(b);
+        if (a != b) parent[b] = a;
+    };
+
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            // 同 x-span 且垂直相邻
+            if (std::abs(spans[i].xmin - spans[j].xmin) > kXSpanTol) continue;
+            if (std::abs(spans[i].xmax - spans[j].xmax) > kXSpanTol) continue;
+            // 垂直间隙 < 1cm → 共享边界
+            double vgap = std::max(spans[i].ymin - spans[j].ymax,
+                                   spans[j].ymin - spans[i].ymax);
+            if (vgap > 0.01) continue;
+            unite(i, j);
+        }
+    }
+
+    // 按组收集
+    std::vector<size_t> group_id(n, SIZE_MAX);
+    size_t group_cnt = 0;
+    for (size_t i = 0; i < n; ++i) {
+        size_t root = find(i);
+        if (group_id[root] == SIZE_MAX) group_id[root] = group_cnt++;
+    }
+
+    f2c::types::Cells result;
+    for (size_t g = 0; g < group_cnt; ++g) {
+        f2c::types::Cells group_cells;
+        for (size_t i = 0; i < n; ++i) {
+            if (group_id[find(i)] == g) group_cells.addGeometry(cells.getGeometry(i));
+        }
+        if (group_cells.size() == 1) {
+            result.addGeometry(group_cells.getGeometry(0));
+        } else {
+            auto merged = group_cells.unionCascaded();
+            for (size_t mi = 0; mi < merged.size(); ++mi)
+                result.addGeometry(merged.getGeometry(mi));
+        }
+    }
+    return result;
+}
+
 }  // namespace yingshi

@@ -47,6 +47,11 @@ CellMergeResult mergeCellsWithSimilarDirection(
     double angle_threshold_deg,
     bool protect_hole_separation);
 
+// Sweep 分解条带合并：合并同 x-span 的垂直相邻碎片 cell
+f2c::types::Cells mergeAdjacentSweepStrips(
+    const f2c::types::Cells& cells,
+    double coverage_width);
+
 // 从多边形边缘提取所有唯一边缘方向角（去重排序）
 std::vector<double> extractEdgeAngles(
     const f2c::types::Cell& cell,
