@@ -305,10 +305,7 @@ PlanningComponentResult planSingleComponent(
                 merge_angle_threshold, req.use_sweep_decomp).cells;
         }
 
-        // Sweep 分解条带合并：修复孔洞顶点 Y 坐标误切问题
-        if (req.use_sweep_decomp && no_hl.size() > 1) {
-            no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
-        }
+        // Sweep 分解条带合并已由 mergeCellsWithSimilarDirection 的 union-find 覆盖
 
         if (req.filter_tiny_cells) {
             const double min_cell_area =
