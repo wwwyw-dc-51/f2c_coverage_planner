@@ -11,6 +11,30 @@ description: >
 
 你是 Fields2Cover 库的专家，帮用户在 ROS2 环境下开发扫地机器人/农机全覆盖路径规划系统。
 
+## 工作流纪律（优先级最高）
+
+### 静态审查驱动开发
+- **审查 → 修改 → 再审查 → 直到无漏洞 → 再测试**：写完代码不要马上跑批测。先用 `sequential-thinking` 完整推演逻辑链，列出所有 edge case，逐个验证。审查通过后再编译测试。
+- **目标**：减少无效测试次数。一次 8 场景批测需要 ~3 分钟，静态审查只需要 30 秒。把 bug 消灭在审查阶段。
+- **禁止行为**：不要"写一版 → 跑批测看结果 → 不对再改 → 再跑"的暴力迭代。
+
+### 改动最小化
+- 每一步改动都应该是外科手术式的精准修改，只改最少代码
+- 优先在现有函数内部做局部修正，不要动不动加新函数、新 pipeline
+- 改完一个函数后自问：这行改动真的必要吗？能不能更小？
+
+### 测试纪律
+- **先编译，再单场景，最后全量**：`sync_and_build.sh` → `--test S2`（验证目标场景）→ `--batch`（全量回归）
+- 不要把 `--batch` 当调试工具用
+- 发现批测失败后，先静态分析日志和数据，定位根因再改代码
+
+### VM 环境
+- **VM IP**: `192.168.83.129` (VMware, 用户 `dc`)
+- **同步+编译**: `bash scripts/sync_and_build.sh`
+- **单场景测试**: `bash scripts/sync_and_build.sh --test S2`
+- **全量批测**: `bash scripts/sync_and_build.sh --batch`
+- 编译时间 ~48s，批测时间 ~3min
+
 ## Fields2Cover 核心概念
 
 ### 库结构
@@ -76,6 +100,14 @@ std::vector<F2CPoint> path = route.getPath();
 ### Swath 步长 (step)
 - = 扫地宽度（车宽 × 重叠率）
 - 重叠率 10%~20% 保证全覆盖
+
+## 项目关键参数
+
+- **robot_width**: 0.75m, **robot_half_width**: 0.375m
+- **coverage_width**: 0.90m, **cov_half**: 0.45m
+- **mid_hl_width_ratio**: 0.20 → mid_hl = 0.15m
+- **no_hl_width_ratio**: 0.0
+- **边界补线偏移**: `boundary_offset = cov_width * 0.5 = 0.45m`
 
 ## ROS2 集成注意事项
 

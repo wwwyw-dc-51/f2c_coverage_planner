@@ -337,7 +337,8 @@ void fillBoundaryGaps(
     const double boundary_offset = boundary_offset_override >= 0.0
         ? boundary_offset_override
         : cov_width * 0.5;
-    (void)robot_half_width;  // 保留接口兼容性，当前不参与边界补线偏移。
+    // robot_half_width > 0 时启用距离感知 skip 检查
+    // （防止贴边过近的 swath 拦截边界补线）
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
@@ -397,6 +398,8 @@ void fillBoundaryGaps(
     // 移除 touches_outer 整体门控，改为逐边独立判断。
     // 原因：cell 经 GDAL 操作后顶点可能与 polygon 顶点略有偏差，
     // vertex-to-vertex 距离门控会误杀实际贴边的 cell。
+    // 贴边 swath 仅触发补线，不修改原 swath
+    // （任何 swath 位置/数量改动都会影响复杂孔洞场景的 routing 拓扑）
     {
         for (size_t pi = 0; pi + 1 < poly_ring.size(); ++pi)
         {
@@ -525,8 +528,12 @@ void fillBoundaryGaps(
                             seg_along_min,
                             std::min(swath_along_1, swath_along_2));
                     if (overlap >= seg_len - cov_width - 1e-6) {
-                        boundary_already_covered = true;
-                        break;
+                        // 距离感知：swath 太近时不认为边界已覆盖
+                        if (robot_half_width <= 0.0
+                            || max_normal_distance >= robot_half_width - 1e-6) {
+                            boundary_already_covered = true;
+                            break;
+                        }
                     }
                 }
                 if (boundary_already_covered) continue;

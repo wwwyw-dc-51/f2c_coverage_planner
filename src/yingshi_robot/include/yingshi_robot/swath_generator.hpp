@@ -17,6 +17,14 @@ f2c::types::Swaths filterShortSwaths(
     double min_length,
     size_t& removed_count);
 
+// 过滤贴近 cell 平行边界的 swath（避免 robot 越界 + 让边界补线触发）
+size_t filterBoundarySwaths(
+    f2c::types::Swaths& swaths,
+    const f2c::types::Cell& cell,
+    double swath_angle,
+    double cov_width,
+    double safe_dist);
+
 // 双向 Swath 端点调整（统一收敛/延伸）
 // distance > 0：端点向中心收缩（闭合边界安全模式）
 // distance < 0：端点向外延伸（开放边界覆盖模式）
