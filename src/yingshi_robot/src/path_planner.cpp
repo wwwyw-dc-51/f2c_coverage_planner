@@ -8,10 +8,12 @@
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/boundary_filler.hpp"  // segmentCrossesHole, pointInAnyHole
 #include <algorithm>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
+#include <queue>
+#include <utility>
 
 namespace yingshi {
 
@@ -129,56 +131,103 @@ std::vector<HoleIntersection> findHoleIntersections(
     return intersections;
 }
 
-double connectionPolylineLength(const std::vector<f2c::types::Point>& points)
+// ── 可见图路径规划器：在孔洞之间找最短安全路径 ──
+// 用 avoidance ring 的顶点构建可见图，Dijkstra 搜索最短路径。
+// 这是底层路径规划，不是后处理补丁——它找到的是真正的最短绕行路径，
+// 而不是沿着孔洞边界"走一圈"。
+
+bool segmentCrossesAnyRing(
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    const std::vector<f2c::types::LinearRing>& rings)
 {
-    double length = 0.0;
-    for (size_t i = 1; i < points.size(); ++i) {
-        length += points[i - 1].distance(points[i]);
-    }
-    return length;
+    return !findHoleIntersections(start, end, rings).empty();
 }
 
-std::vector<f2c::types::Point> walkHoleBoundary(
-    const HoleIntersection& entry,
-    const HoleIntersection& exit,
-    const std::vector<f2c::types::LinearRing>& hole_rings)
+std::vector<f2c::types::Point> planHoleAvoidancePath(
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    const std::vector<f2c::types::LinearRing>& avoidance_rings)
 {
-    if (entry.hole_idx != exit.hole_idx) return {};
-
-    const auto& ring = hole_rings[entry.hole_idx];
-    const size_t edge_count = ring.size() > 0 ? ring.size() - 1 : 0;
-    if (edge_count == 0) return {};
-    const f2c::types::Point entry_point(entry.x, entry.y);
-    const f2c::types::Point exit_point(exit.x, exit.y);
-    if (entry.edge_idx == exit.edge_idx) {
-        return {entry_point, exit_point};
+    // 直线不穿过任何 ring → 直接返回
+    if (!segmentCrossesAnyRing(start, end, avoidance_rings)) {
+        return {start, end};
     }
 
-    auto addVertex = [&](std::vector<f2c::types::Point>& path, size_t index) {
-        path.emplace_back(
-            ring.getGeometry(index).getX(), ring.getGeometry(index).getY());
-    };
+    // 收集候选路标点：start + all avoidance ring vertices + end
+    struct Node { double x, y; };
+    std::vector<Node> nodes;
+    nodes.push_back({start.getX(), start.getY()});
 
-    std::vector<f2c::types::Point> forward {entry_point};
-    size_t index = (entry.edge_idx + 1) % edge_count;
-    while (true) {
-        addVertex(forward, index);
-        if (index == exit.edge_idx) break;
-        index = (index + 1) % edge_count;
+    for (const auto& ring : avoidance_rings) {
+        for (size_t i = 0; i + 1 < ring.size(); ++i) {
+            nodes.push_back({
+                ring.getGeometry(i).getX(),
+                ring.getGeometry(i).getY()});
+        }
     }
-    forward.push_back(exit_point);
+    nodes.push_back({end.getX(), end.getY()});
 
-    std::vector<f2c::types::Point> backward {entry_point};
-    index = entry.edge_idx;
-    while (true) {
-        addVertex(backward, index);
-        if (index == (exit.edge_idx + 1) % edge_count) break;
-        index = (index + edge_count - 1) % edge_count;
+    const size_t n = nodes.size();
+    const size_t start_id = 0;
+    const size_t end_id = n - 1;
+    if (n <= 2) return {start, end};
+
+    // 构建邻接表：两点之间有边 ↔ 连线不穿过任何 enlarged ring
+    std::vector<std::vector<std::pair<size_t, double>>> adj(n);
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            f2c::types::Point pi(nodes[i].x, nodes[i].y);
+            f2c::types::Point pj(nodes[j].x, nodes[j].y);
+            if (!segmentCrossesAnyRing(pi, pj, avoidance_rings)) {
+                double d = pi.distance(pj);
+                adj[i].push_back({j, d});
+                adj[j].push_back({i, d});
+            }
+        }
     }
-    backward.push_back(exit_point);
 
-    return connectionPolylineLength(forward) <=
-        connectionPolylineLength(backward) ? forward : backward;
+    // Dijkstra
+    std::vector<double> dist(n, std::numeric_limits<double>::max());
+    std::vector<int> prev(n, -1);
+    using PQItem = std::pair<double, size_t>;
+    std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
+
+    dist[start_id] = 0.0;
+    pq.push({0.0, start_id});
+
+    while (!pq.empty()) {
+        auto [d, u] = pq.top();
+        pq.pop();
+        if (d > dist[u]) continue;
+        if (u == end_id) break;
+        for (const auto& [v, w] : adj[u]) {
+            double nd = d + w;
+            if (nd < dist[v]) {
+                dist[v] = nd;
+                prev[v] = static_cast<int>(u);
+                pq.push({nd, v});
+            }
+        }
+    }
+
+    // 重建路径（不可达时回退到直接连接）
+    if (dist[end_id] >= std::numeric_limits<double>::max() * 0.5) {
+        return {start, end};
+    }
+
+    std::vector<size_t> node_path;
+    for (int u = static_cast<int>(end_id); u >= 0; u = prev[u]) {
+        node_path.push_back(static_cast<size_t>(u));
+    }
+    std::reverse(node_path.begin(), node_path.end());
+
+    std::vector<f2c::types::Point> result;
+    result.reserve(node_path.size());
+    for (size_t id : node_path) {
+        result.emplace_back(nodes[id].x, nodes[id].y);
+    }
+    return result;
 }
 
 std::vector<f2c::types::LinearRing> makeAvoidanceRings(
@@ -235,25 +284,19 @@ std::vector<f2c::types::Point> repairConnectionPolyline(
     for (size_t point_idx = 1; point_idx < valid_points.size(); ++point_idx) {
         const auto& start = valid_points[point_idx - 1];
         const auto& end = valid_points[point_idx];
-        const auto intersections =
-            findHoleIntersections(start, end, avoidance_rings);
 
-        for (size_t hit_idx = 0; hit_idx + 1 < intersections.size();) {
-            const auto& entry = intersections[hit_idx];
-            const auto& exit = intersections[hit_idx + 1];
-            if (entry.hole_idx != exit.hole_idx) {
-                ++hit_idx;
-                continue;
-            }
-            const auto detour =
-                walkHoleBoundary(entry, exit, avoidance_rings);
-            for (const auto& point : detour) {
-                appendDistinct(result, point);
-            }
-            repaired = repaired || !detour.empty();
-            hit_idx += 2;
+        // ── 可见图路径规划：底层最短安全路径 ──
+        // 替代 walkHoleBoundary 的"沿边界走"策略。
+        // 在孔洞 avoidance ring 顶点上构建可见图 + Dijkstra，
+        // 找到真正的最短绕行路径。
+        const auto detour =
+            planHoleAvoidancePath(start, end, avoidance_rings);
+        for (size_t i = 1; i < detour.size(); ++i) {
+            appendDistinct(result, detour[i]);
         }
-        appendDistinct(result, end);
+        if (detour.size() > 2) {
+            repaired = true;
+        }
     }
     return result;
 }
