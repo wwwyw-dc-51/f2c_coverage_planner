@@ -44,6 +44,14 @@ f2c::types::Swath adjustSwathEndpointsForBoundaryClearance(
     double coverage_width,
     double default_margin);
 
+// 自适应端点缩进：用 robot 四角 point-in-polygon 检测，只缩进会越界的端点
+f2c::types::Swath adjustSwathEndpointsAdaptive(
+    const f2c::types::Swath& swath,
+    const f2c::types::LinearRing& outer_ring,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double robot_half_width,
+    double shrink_distance);
+
 // 从全部 Cell 的 swath 中删除功能性重复的内部接缝补线。
 // 仅当接缝两侧原有 swath 的总间距不超过覆盖宽度加容差时删除；
 // 真正超过覆盖能力的缺口仍保留一条补线。返回删除数量。

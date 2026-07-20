@@ -317,6 +317,70 @@ f2c::types::Swath adjustSwathEndpointsForBoundaryClearance(
     return adjusted;
 }
 
+// ========== 自适应端点缩进（Robot Footprint 感知）==========
+// 对每个 swath 端点计算 robot 四角位置，用 point-in-polygon 检测是否需要缩进。
+// 四角全在多边形内 → 不缩进（保持覆盖）；任一越界 → 缩进 shrink_distance。
+f2c::types::Swath adjustSwathEndpointsAdaptive(
+    const f2c::types::Swath& swath,
+    const f2c::types::LinearRing& outer_ring,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double robot_half_width,
+    double shrink_distance)
+{
+    if (shrink_distance == 0.0 || robot_half_width <= 0.0)
+        return swath;
+
+    const auto start = swath.startPoint();
+    const auto end = swath.endPoint();
+    const double dx = end.getX() - start.getX();
+    const double dy = end.getY() - start.getY();
+    const double length = std::hypot(dx, dy);
+    if (length < 1e-9) return swath;
+
+    const double unit_dx = dx / length;
+    const double unit_dy = dy / length;
+    const double perp_dx = -unit_dy;
+    const double perp_dy = unit_dx;
+
+    auto robotFullyInside = [&](double cx, double cy) -> bool {
+        for (double sa : {-1.0, 1.0}) {
+            for (double sp : {-1.0, 1.0}) {
+                double rx = cx + sa * robot_half_width * unit_dx
+                              + sp * robot_half_width * perp_dx;
+                double ry = cy + sa * robot_half_width * unit_dy
+                              + sp * robot_half_width * perp_dy;
+                if (!pointInPolygon(rx, ry, outer_ring))
+                    return false;
+                if (pointInAnyHole(rx, ry, hole_rings))
+                    return false;
+            }
+        }
+        return true;
+    };
+
+    const double start_margin = robotFullyInside(start.getX(), start.getY())
+        ? 0.0 : shrink_distance;
+    const double end_margin = robotFullyInside(end.getX(), end.getY())
+        ? 0.0 : shrink_distance;
+
+    if (start_margin == 0.0 && end_margin == 0.0)
+        return swath;
+    if (length - start_margin - end_margin <= 1e-9)
+        return swath;
+
+    f2c::types::LineString adjusted_path;
+    adjusted_path.addPoint(f2c::types::Point(
+        start.getX() + start_margin * unit_dx,
+        start.getY() + start_margin * unit_dy));
+    adjusted_path.addPoint(f2c::types::Point(
+        end.getX() - end_margin * unit_dx,
+        end.getY() - end_margin * unit_dy));
+    f2c::types::Swath adjusted(
+        adjusted_path, swath.getWidth(), swath.getId(), swath.getType());
+    adjusted.setCreationDir(swath.getCreationDir());
+    return adjusted;
+}
+
 // ========== 边界间隙补填（完整版，v8/v9 成熟实现）==========
 void fillBoundaryGaps(
     f2c::types::Swaths& cell_swaths,
