@@ -11,46 +11,6 @@ description: >
 
 你是 Fields2Cover 库的专家，帮用户在 ROS2 环境下开发扫地机器人/农机全覆盖路径规划系统。
 
-## 工作流纪律（优先级最高）
-
-### 静态审查驱动开发
-- **审查 → 修改 → 再审查 → 直到无漏洞 → 再测试**：写完代码不要马上跑批测。先用 `sequential-thinking` 完整推演逻辑链，列出所有 edge case，逐个验证。审查通过后再编译测试。
-- **目标**：减少无效测试次数。一次 8 场景批测需要 ~3 分钟，静态审查只需要 30 秒。把 bug 消灭在审查阶段。
-- **禁止行为**：不要"写一版 → 跑批测看结果 → 不对再改 → 再跑"的暴力迭代。
-
-### 改动最小化
-- 每一步改动都应该是外科手术式的精准修改，只改最少代码
-- 优先在现有函数内部做局部修正，不要动不动加新函数、新 pipeline
-- 改完一个函数后自问：这行改动真的必要吗？能不能更小？
-
-### 测试纪律
-- **先编译，再单场景，最后全量**：`sync_and_build.sh` → `--test S2`（验证目标场景）→ `--batch`（全量回归）
-- 不要把 `--batch` 当调试工具用
-- 发现批测失败后，先静态分析日志和数据，定位根因再改代码
-
-### 并行与 Agent 分派
-- **批测跑着的时候别闲着**：编译/批测是 IO 密集型，后台跑。同时做代码审查、文档更新、数据分析。
-- **独立子任务用 Agent 并行**：分析多个场景的 JSON 数据、多文件代码审查、多维度问题诊断 — 这些互不依赖的工作应该用 `Agent` 工具同时派发。
-- **避免串行等待**：不要"读文件A → 等结果 → 读文件B → 等结果"。用并行 Read/Grep/Bash 一次性拉取。
-
-### JSON 数据诊断
-- 每次批测产出 `{NAME}_data.json`，包含：
-  - `path`: 完整路径点 [{x, y}, ...]
-  - `swaths`: 所有 swath 端点 [{points: [{x,y}, {x,y}]}, ...]
-  - `cells`: 分解后的 cell 几何 + 内部 swaths
-  - `connections`: cell 间连接线
-  - `eval`: 覆盖率/得分/路径长/重叠率/耗时
-  - `cspace`: 可达区域分析
-- **出问题先看 JSON，不要猜**：覆盖率下降？看 path 和 swaths 数据。边界出界？算 robot footprint vs polygon。swath 角度不对？检查 swaths 中每条线的方向。
-- JSON 在 VM 上，用 `ssh dc@192.168.83.129 "python3 -c '...' " ` 直接分析，不需要拉回本地。
-
-### VM 环境
-- **VM IP**: `192.168.83.129` (VMware, 用户 `dc`)
-- **同步+编译**: `bash scripts/sync_and_build.sh`
-- **单场景测试**: `bash scripts/sync_and_build.sh --test S2`
-- **全量批测**: `bash scripts/sync_and_build.sh --batch`
-- 编译时间 ~48s，批测时间 ~3min
-
 ## Fields2Cover 核心概念
 
 ### 库结构
@@ -116,14 +76,6 @@ std::vector<F2CPoint> path = route.getPath();
 ### Swath 步长 (step)
 - = 扫地宽度（车宽 × 重叠率）
 - 重叠率 10%~20% 保证全覆盖
-
-## 项目关键参数
-
-- **robot_width**: 0.75m, **robot_half_width**: 0.375m
-- **coverage_width**: 0.90m, **cov_half**: 0.45m
-- **mid_hl_width_ratio**: 0.20 → mid_hl = 0.15m
-- **no_hl_width_ratio**: 0.0
-- **边界补线偏移**: `boundary_offset = cov_width * 0.5 = 0.45m`
 
 ## ROS2 集成注意事项
 

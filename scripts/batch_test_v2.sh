@@ -422,13 +422,6 @@ PYTEST
     kill $PLANNER_PID 2>/dev/null || true
     wait $PLANNER_PID 2>/dev/null || true
 
-    # ── 拷贝每场景独立的 VIS JSON 备份（防止跨场景数据串扰）──
-    if [ -f "$VIS_JSON" ]; then
-        cp "$VIS_JSON" "$RESULT_DIR/${NAME}_vis.json"
-    fi
-    # ── 立即清理共享 VIS JSON，避免下一场景读到残留数据 ──
-    rm -f "$VIS_JSON"
-
     echo "  $NAME done."
 
     if [ "$CAPTURE_STATUS" -ne 0 ]; then
