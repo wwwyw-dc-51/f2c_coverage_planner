@@ -47,6 +47,12 @@ CellMergeResult mergeCellsWithSimilarDirection(
     double angle_threshold_deg,
     bool protect_hole_separation);
 
+// 合并同 x-span、垂直相邻的 sweep 条带（被远端孔洞顶点误切开的矩形区域）
+// unionCascaded 后 interior ring 检测 → 回退保留原始 cell
+f2c::types::Cells mergeAdjacentSweepStrips(
+    const f2c::types::Cells& cells,
+    double coverage_width);
+
 // 从多边形边缘提取所有唯一边缘方向角（去重排序）
 std::vector<double> extractEdgeAngles(
     const f2c::types::Cell& cell,

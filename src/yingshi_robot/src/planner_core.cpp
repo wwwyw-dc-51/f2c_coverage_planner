@@ -266,22 +266,18 @@ PlanningComponentResult planSingleComponent(
             return result;
         }
 
-        // 第一轮合并：v9.11 原版（质心连线孔洞保护）
+        // 第一轮：v9.11 同向合并（顶点邻近 + 质心连线孔洞保护 + interior ring）
         if (no_hl.size() > 1) {
             const double merge_angle_threshold = req.use_sweep_decomp
                 ? 60.0 : req.merge_angle_threshold;
             no_hl = mergeCellsWithSimilarDirection(
                 no_hl, req.polygon, req.coverage_width,
-                merge_angle_threshold, true).cells;
+                merge_angle_threshold, req.use_sweep_decomp).cells;
         }
 
-        // 第二轮合并：孔洞同侧的漏网 cell（不用质心连线，靠 interior ring 把关）
-        if (no_hl.size() > 1) {
-            const double merge_angle_threshold = req.use_sweep_decomp
-                ? 60.0 : req.merge_angle_threshold;
-            no_hl = mergeCellsWithSimilarDirection(
-                no_hl, req.polygon, req.coverage_width,
-                merge_angle_threshold, false).cells;
+        // 第二轮：合并被孔洞顶点误切的同 x-span 矩形条带（interior ring 把关）
+        if (req.use_sweep_decomp && no_hl.size() > 1) {
+            no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
         }
 
         if (req.filter_tiny_cells) {
