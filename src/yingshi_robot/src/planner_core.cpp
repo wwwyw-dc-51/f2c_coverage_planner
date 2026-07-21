@@ -229,7 +229,27 @@ PlanningComponentResult planSingleComponent(
                     decomposed = rectilinearDecompose(work_cell, grid_cell, dparams);
                 }
 
-                // 逐 cell 自适应 no_hl
+                // ★ 先合并分解 cell（侵蚀前，共享边完整），再逐 cell 侵蚀
+                f2c::types::Cells cells_to_erode;
+                if (decomposed.size() > 1) {
+                    const double merge_angle = req.use_sweep_decomp
+                        ? 60.0 : req.merge_angle_threshold;
+                    const double min_shared = req.coverage_width * 0.15;
+                    auto merge_result = mergeCellsWithSimilarDirection(
+                        decomposed, req.polygon, req.coverage_width,
+                        merge_angle, min_shared);
+                    cells_to_erode = std::move(merge_result.cells);
+                } else {
+                    cells_to_erode = decomposed;
+                }
+
+                if (req.filter_tiny_cells) {
+                    const double min_cell_area =
+                        req.min_cell_area_ratio * req.coverage_width * req.robot_width;
+                    cells_to_erode = filterTinyCells(cells_to_erode, min_cell_area);
+                }
+
+                // 逐 cell 自适应 no_hl 侵蚀
                 double cell_no_hl_ratio = effective_no_hl_ratio;
                 {
                     double cell_perimeter = work_cell.getExteriorRing().length();
@@ -245,14 +265,14 @@ PlanningComponentResult planSingleComponent(
 
                 double no_hl_w = cell_no_hl_ratio * req.robot_width;
                 if (no_hl_w > 1e-6) {
-                    for (size_t di = 0; di < decomposed.size(); ++di) {
+                    for (size_t di = 0; di < cells_to_erode.size(); ++di) {
                         f2c::types::Cells single;
-                        single.addGeometry(decomposed.getGeometry(di));
+                        single.addGeometry(cells_to_erode.getGeometry(di));
                         auto eroded = hl_gen.generateHeadlands(single, no_hl_w);
                         for (size_t ei = 0; ei < eroded.size(); ++ei) no_hl.addGeometry(eroded.getGeometry(ei));
                     }
                 } else {
-                    for (size_t di = 0; di < decomposed.size(); ++di) no_hl.addGeometry(decomposed.getGeometry(di));
+                    for (size_t di = 0; di < cells_to_erode.size(); ++di) no_hl.addGeometry(cells_to_erode.getGeometry(di));
                 }
             }
         } else {
@@ -263,25 +283,6 @@ PlanningComponentResult planSingleComponent(
 
         if (no_hl.size() == 0) {
             result.error_message = "Decomposition produced zero cells";
-            return result;
-        }
-
-        // 先合并同向 cell（让微 cell 有机会被邻居吸收），再过滤孤立碎 cell
-        if (no_hl.size() > 1) {
-            const double merge_angle_threshold = req.use_sweep_decomp
-                ? 60.0 : req.merge_angle_threshold;
-            no_hl = mergeCellsWithSimilarDirection(
-                no_hl, req.polygon, req.coverage_width,
-                merge_angle_threshold, req.use_sweep_decomp).cells;
-        }
-
-        if (req.filter_tiny_cells) {
-            const double min_cell_area =
-                req.min_cell_area_ratio * req.coverage_width * req.robot_width;
-            no_hl = filterTinyCells(no_hl, min_cell_area);
-        }
-        if (no_hl.size() == 0) {
-            result.error_message = "Cell filtering produced zero cells";
             return result;
         }
 

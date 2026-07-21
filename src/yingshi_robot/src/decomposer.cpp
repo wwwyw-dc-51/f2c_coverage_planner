@@ -9,6 +9,7 @@
 #include "yingshi_robot/decomposer.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <functional>
 
@@ -283,12 +284,86 @@ f2c::types::Cells filterTinyCells(
     return filtered;
 }
 
+// ========== 共享边检测 ==========
+// 检测两个外环是否有共线且重叠的边段，返回总重叠长度
+double sharedEdgeLength(
+    const f2c::types::LinearRing& ring_a,
+    const f2c::types::LinearRing& ring_b,
+    double collinear_angle_tol_rad,
+    double collinear_dist_tol)
+{
+    double total_overlap = 0.0;
+
+    // 角度容差 → dot product 容差：||dot| - 1| < 1 - cos(angle_tol)
+    const double dot_tol = 1.0 - std::cos(collinear_angle_tol_rad);
+
+    // 遍历 ring_a 的每条边 (pa → pa_next)
+    for (size_t ia = 0; ia + 1 < ring_a.size(); ++ia) {
+        const double ax1 = ring_a.getGeometry(ia).getX();
+        const double ay1 = ring_a.getGeometry(ia).getY();
+        const double ax2 = ring_a.getGeometry(ia + 1).getX();
+        const double ay2 = ring_a.getGeometry(ia + 1).getY();
+
+        const double adx = ax2 - ax1;
+        const double ady = ay2 - ay1;
+        const double alen = std::hypot(adx, ady);
+        if (alen < 1e-9) continue;
+
+        // ring_a 边的方向单位向量
+        const double aux = adx / alen;
+        const double auy = ady / alen;
+
+        // 遍历 ring_b 的每条边
+        for (size_t ib = 0; ib + 1 < ring_b.size(); ++ib) {
+            const double bx1 = ring_b.getGeometry(ib).getX();
+            const double by1 = ring_b.getGeometry(ib).getY();
+            const double bx2 = ring_b.getGeometry(ib + 1).getX();
+            const double by2 = ring_b.getGeometry(ib + 1).getY();
+
+            const double bdx = bx2 - bx1;
+            const double bdy = by2 - by1;
+            const double blen = std::hypot(bdx, bdy);
+            if (blen < 1e-9) continue;
+
+            // 方向夹角检测：||dot| - 1| < 1 - cos(angle_tol)
+            const double bux = bdx / blen;
+            const double buy = bdy / blen;
+            const double dot = aux * bux + auy * buy;
+
+            if (std::abs(std::abs(dot) - 1.0) > dot_tol) continue;
+
+            // 线段间最短距离检测（共线判定）
+            // 从 b 线段起点到 a 线段的垂距
+            const double cross_dist =
+                std::abs((bx1 - ax1) * ady - (by1 - ay1) * adx) / alen;
+            if (cross_dist > collinear_dist_tol) continue;
+
+            // 投影参数化：将 b 线段投影到 a 线段方向上
+            const double proj_b1 = (bx1 - ax1) * aux + (by1 - ay1) * auy;
+            const double proj_b2 = (bx2 - ax1) * aux + (by2 - ay1) * auy;
+
+            const double b_min = std::min(proj_b1, proj_b2);
+            const double b_max = std::max(proj_b1, proj_b2);
+
+            // 与 a 线段的 [0, alen] 区间取交集
+            const double overlap_start = std::max(0.0, b_min);
+            const double overlap_end = std::min(alen, b_max);
+
+            if (overlap_end > overlap_start) {
+                total_overlap += overlap_end - overlap_start;
+            }
+        }
+    }
+
+    return total_overlap;
+}
+
 CellMergeResult mergeCellsWithSimilarDirection(
     const f2c::types::Cells& cells,
     const f2c::types::Cell& full_polygon,
     double coverage_width,
     double angle_threshold_deg,
-    bool protect_hole_separation)
+    double min_shared_edge_len)
 {
     CellMergeResult merge_result;
     merge_result.cells = cells;
@@ -297,45 +372,56 @@ CellMergeResult mergeCellsWithSimilarDirection(
     }
 
     const size_t cell_count = cells.size();
+
+    // 1. 计算每个 cell 的主方向
     std::vector<double> cell_directions(cell_count);
     for (size_t i = 0; i < cell_count; ++i) {
         cell_directions[i] = computeCellMainDirection(cells.getGeometry(i));
     }
 
+    // 2. 共享边检测（替代顶点距离邻近判断）
+    //    只合并真正共享边界的 cell，而非"距离近"的 cell
     std::vector<std::vector<bool>> adjacent(
         cell_count, std::vector<bool>(cell_count, false));
+    size_t edge_pairs_found = 0;
+    double max_edge_found = 0.0;
     for (size_t i = 0; i < cell_count; ++i) {
         const auto& ring_i = cells.getGeometry(i).getExteriorRing();
         for (size_t j = i + 1; j < cell_count; ++j) {
             const auto& ring_j = cells.getGeometry(j).getExteriorRing();
-            double min_distance = std::numeric_limits<double>::max();
-            for (size_t pi = 0; pi < ring_i.size(); ++pi) {
-                const double ix = ring_i.getGeometry(pi).getX();
-                const double iy = ring_i.getGeometry(pi).getY();
-                for (size_t pj = 0; pj < ring_j.size(); ++pj) {
-                    min_distance = std::min(
-                        min_distance,
-                        std::hypot(
-                            ix - ring_j.getGeometry(pj).getX(),
-                            iy - ring_j.getGeometry(pj).getY()));
-                }
+            double shared = sharedEdgeLength(ring_i, ring_j);
+            if (shared > max_edge_found) max_edge_found = shared;
+            if (shared >= min_shared_edge_len) {
+                adjacent[i][j] = adjacent[j][i] = true;
+                ++edge_pairs_found;
             }
-            adjacent[i][j] = adjacent[j][i] =
-                min_distance < 2.0 * coverage_width;
         }
     }
+    fprintf(stderr, "[merge] %zu cells, shared-edge pairs found: %zu, max_shared=%.3f, min_edge=%.3f\n",
+        cell_count, edge_pairs_found, max_edge_found, min_shared_edge_len);
 
+    // 3. 方向一致性过滤 + union-find 分组
     const double angle_threshold =
         std::clamp(angle_threshold_deg, 0.0, 90.0) * M_PI / 180.0;
-    std::vector<int> group(cell_count, -1);
-    int next_group = 0;
+
+    // Union-find: 每个 cell 初始指向自己
+    std::vector<size_t> parent(cell_count);
+    for (size_t i = 0; i < cell_count; ++i) parent[i] = i;
+
+    std::function<size_t(size_t)> find = [&](size_t x) -> size_t {
+        if (parent[x] != x) parent[x] = find(parent[x]);
+        return parent[x];
+    };
+    auto unite = [&](size_t a, size_t b) {
+        size_t ra = find(a), rb = find(b);
+        if (ra != rb) parent[ra] = rb;
+    };
+
     for (size_t i = 0; i < cell_count; ++i) {
-        if (group[i] >= 0) continue;
-        group[i] = next_group++;
-
         for (size_t j = i + 1; j < cell_count; ++j) {
-            if (group[j] >= 0 || !adjacent[i][j]) continue;
+            if (!adjacent[i][j]) continue;
 
+            // 方向一致性
             double angle_i = cell_directions[i];
             while (angle_i < 0.0) angle_i += M_PI;
             while (angle_i >= M_PI) angle_i -= M_PI;
@@ -346,129 +432,79 @@ CellMergeResult mergeCellsWithSimilarDirection(
             if (angle_diff > M_PI / 2.0) angle_diff = M_PI - angle_diff;
             if (angle_diff >= angle_threshold) continue;
 
-            if (protect_hole_separation && full_polygon.size() > 1) {
-                const auto& ring_i =
-                    cells.getGeometry(i).getExteriorRing();
-                const auto& ring_j =
-                    cells.getGeometry(j).getExteriorRing();
-
-                auto ringCentroid = [](const f2c::types::LinearRing& ring) {
-                    if (ring.size() <= 1) {
-                        return f2c::types::Point(0.0, 0.0);
-                    }
-                    const size_t count = ring.size() - 1;
-                    double x = 0.0;
-                    double y = 0.0;
-                    for (size_t point_idx = 0; point_idx < count;
-                         ++point_idx) {
-                        x += ring.getGeometry(point_idx).getX();
-                        y += ring.getGeometry(point_idx).getY();
-                    }
-                    return f2c::types::Point(x / count, y / count);
-                };
-
-                const auto centroid_i = ringCentroid(ring_i);
-                const auto centroid_j = ringCentroid(ring_j);
-                bool crosses_hole = false;
-                for (size_t hole_idx = 0;
-                     hole_idx + 1 < full_polygon.size() && !crosses_hole;
-                     ++hole_idx) {
-                    const auto& hole =
-                        full_polygon.getInteriorRing(hole_idx);
-                    for (size_t edge_idx = 0;
-                         edge_idx + 1 < hole.size() && !crosses_hole;
-                         ++edge_idx) {
-                        const double ax = hole.getGeometry(edge_idx).getX();
-                        const double ay = hole.getGeometry(edge_idx).getY();
-                        const double bx =
-                            hole.getGeometry(edge_idx + 1).getX();
-                        const double by =
-                            hole.getGeometry(edge_idx + 1).getY();
-                        const double dx =
-                            centroid_j.getX() - centroid_i.getX();
-                        const double dy =
-                            centroid_j.getY() - centroid_i.getY();
-                        const double denominator =
-                            dx * (by - ay) - dy * (bx - ax);
-                        if (std::abs(denominator) < 1e-18) continue;
-                        const double t =
-                            ((ax - centroid_i.getX()) * (by - ay) -
-                             (ay - centroid_i.getY()) * (bx - ax)) /
-                            denominator;
-                        const double u =
-                            ((ax - centroid_i.getX()) * dy -
-                             (ay - centroid_i.getY()) * dx) /
-                            denominator;
-                        if (t > 0.001 && t < 0.999 &&
-                            u > 0.0 && u < 1.0) {
-                            crosses_hole = true;
-                        }
-                    }
-                }
-
-                if (crosses_hole) {
-                    double touch_distance =
-                        std::numeric_limits<double>::max();
-                    for (size_t pi = 0; pi + 1 < ring_i.size(); ++pi) {
-                        const double ix = ring_i.getGeometry(pi).getX();
-                        const double iy = ring_i.getGeometry(pi).getY();
-                        for (size_t pj = 0; pj + 1 < ring_j.size(); ++pj) {
-                            touch_distance = std::min(
-                                touch_distance,
-                                std::hypot(
-                                    ix - ring_j.getGeometry(pj).getX(),
-                                    iy - ring_j.getGeometry(pj).getY()));
-                        }
-                    }
-                    if (touch_distance >= coverage_width * 0.25) {
-                        continue;
-                    }
-                }
-            }
-
-            group[j] = group[i];
+            // 通过共享边 + 方向检测 → 候选合并
+            unite(i, j);
         }
     }
 
-    if (next_group >= static_cast<int>(cell_count)) {
-        return merge_result;
+    // 4. 按 union-find 根分组
+    std::vector<std::vector<size_t>> groups(cell_count);
+    for (size_t i = 0; i < cell_count; ++i) {
+        groups[find(i)].push_back(i);
     }
 
+    // 5. 逐组合并 + 几何验证门
     f2c::types::Cells merged_cells;
-    for (int group_id = 0; group_id < next_group; ++group_id) {
-        f2c::types::Cell merged_cell;
-        bool first = true;
+    for (const auto& group : groups) {
+        if (group.empty()) continue;
+
+        if (group.size() == 1) {
+            // 孤立 cell，不需要合并
+            merged_cells.addGeometry(cells.getGeometry(group[0]));
+            continue;
+        }
+
+        // 组内按面积降序排列，大 cell 优先作为合并基
+        std::vector<size_t> sorted_group = group;
+        std::sort(sorted_group.begin(), sorted_group.end(),
+            [&](size_t a, size_t b) {
+                return cells.getGeometry(a).area() >
+                       cells.getGeometry(b).area();
+            });
+
+        f2c::types::Cell merged_cell = cells.getGeometry(sorted_group[0]);
         size_t successful_merges = 0;
-        for (size_t i = 0; i < cell_count; ++i) {
-            if (group[i] != group_id) continue;
-            if (first) {
-                merged_cell = cells.getGeometry(i);
-                first = false;
+        bool group_valid = true;
+
+        for (size_t k = 1; k < sorted_group.size() && group_valid; ++k) {
+            const auto& other = cells.getGeometry(sorted_group[k]);
+            f2c::types::Cells temporary(merged_cell);
+            auto union_result = temporary.unionOp(other);
+
+            if (union_result.size() == 0) {
+                // 拓扑运算失败 → 保留原始 cell 为独立单元
+                merged_cells.addGeometry(other);
                 continue;
             }
 
-            f2c::types::Cells temporary(merged_cell);
-            auto union_result = temporary.unionOp(cells.getGeometry(i));
-            if (union_result.size() == 0) {
-                // 拓扑运算失败时保留当前单元，不能静默缩小作业区。
-                merged_cells.addGeometry(cells.getGeometry(i));
+            // ★ 几何验证门：检查合并后的 cell 是否包进了孔洞
+            //    Cell::size() 返回 ring 数量，> 1 表示有 interior ring
+            const auto& result_cell = union_result.getGeometry(0);
+            if (result_cell.size() > 1) {
+                // 合并产生了 interior ring → 包进了孔洞 → 拒绝！
+                merged_cells.addGeometry(other);
                 continue;
             }
+
             ++successful_merges;
-            merged_cell = union_result.getGeometry(0);
-            // 保持 legacy 的 MultiPolygon 顺序：首块继续参与后续合并，
-            // 其余分量先作为独立 Cell 输出，确保路线基线不漂移。
+            merged_cell = result_cell;
+
+            // 其余独立分量作为独立 Cell 输出
             for (size_t result_idx = 1;
                  result_idx < union_result.size(); ++result_idx) {
                 merged_cells.addGeometry(
                     union_result.getGeometry(result_idx));
             }
         }
+
         merge_result.merged_count += successful_merges;
         merged_cells.addGeometry(merged_cell);
     }
 
     merge_result.cells = merged_cells;
+    fprintf(stderr, "[merge] %zu cells → %zu cells (%zu merged, min_edge=%.3f)\n",
+        cell_count, merged_cells.size(), merge_result.merged_count,
+        min_shared_edge_len);
     return merge_result;
 }
 

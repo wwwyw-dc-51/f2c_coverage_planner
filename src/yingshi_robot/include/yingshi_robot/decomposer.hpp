@@ -39,13 +39,24 @@ struct CellMergeResult {
     std::size_t merged_count = 0;
 };
 
-// 合并相邻且主方向接近的分解单元；孔洞保护用于避免跨障碍误合并。
+// 检测两个 cell 外环是否有共线重叠的边，返回重叠长度。
+// collinear_angle_tol_rad: 方向夹角容差（默认 1°）
+// collinear_dist_tol: 线段到线段最大距离（默认 0.01m）
+double sharedEdgeLength(
+    const f2c::types::LinearRing& ring_a,
+    const f2c::types::LinearRing& ring_b,
+    double collinear_angle_tol_rad = 0.03491,  // 2° → dot tol = 1-cos(2°) ≈ 0.0006
+    double collinear_dist_tol = 0.05);          // 5cm 共线容差
+
+// 合并相邻且主方向接近的分解单元。
+// min_shared_edge_len: 共享边最小长度（必要条件），低于此值不合并
+// 内部用 unionOp + interior ring 检测确保不产生穿洞 cell
 CellMergeResult mergeCellsWithSimilarDirection(
     const f2c::types::Cells& cells,
     const f2c::types::Cell& full_polygon,
     double coverage_width,
     double angle_threshold_deg,
-    bool protect_hole_separation);
+    double min_shared_edge_len);
 
 // 从多边形边缘提取所有唯一边缘方向角（去重排序）
 std::vector<double> extractEdgeAngles(

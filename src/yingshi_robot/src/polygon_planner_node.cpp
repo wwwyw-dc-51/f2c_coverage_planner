@@ -2609,7 +2609,7 @@ private:
                     use_sweep_decomp_ ? 60.0 : merge_angle_threshold_;
                 auto merge_result = yingshi::mergeCellsWithSimilarDirection(
                     no_hl, cell, coverage_width_, merge_angle_threshold,
-                    use_sweep_decomp_);
+                    coverage_width_ * 0.15);  // 共享边 ≥ 13.5cm 才合并
                 no_hl = std::move(merge_result.cells);
                 if (merge_result.merged_count > 0) {
                     RCLCPP_INFO(this->get_logger(),
