@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <set>
 
 namespace yingshi {
 
@@ -47,6 +48,80 @@ f2c::types::Swaths filterShortSwaths(
     }
 
     return filtered_swaths;
+}
+
+// ========== 过滤贴近 cell 平行边界的 swath ==========
+// F2C 生成的最后一条 swath 可能离 cell 边界很近（< robot_half_width），
+// 导致机器人本体越界，同时阻止 fillBoundaryGaps 在正确偏移位置补线。
+// 此函数过滤掉距离 cell 平行边界 < safe_dist 的最外层 swath。
+// 后续 fillBoundaryGaps 会在 cov_width/2 偏移处补线，保证覆盖。
+// 安全约束：绝不移除全部 swath（至少保留 1 条）。
+size_t filterBoundarySwaths(
+    f2c::types::Swaths& swaths,
+    const f2c::types::Cell& cell,
+    double swath_angle,
+    double cov_width,
+    double safe_dist)
+{
+    if (swaths.size() <= 1) return 0;
+
+    const auto& ring = cell.getExteriorRing();
+    if (ring.size() < 3) return 0;
+
+    double s_dx = std::cos(swath_angle);
+    double s_dy = std::sin(swath_angle);
+    double n_x = -s_dy, n_y = s_dx;  // 法向（垂直于 swath）
+
+    // 计算 cell 边界在法向的投影范围
+    double cell_min_p = 1e9, cell_max_p = -1e9;
+    for (size_t ci = 0; ci + 1 < ring.size(); ++ci) {
+        double p = ring.getGeometry(ci).getX() * n_x
+                 + ring.getGeometry(ci).getY() * n_y;
+        cell_min_p = std::min(cell_min_p, p);
+        cell_max_p = std::max(cell_max_p, p);
+    }
+
+    // 收集所有 swath 中心在法向的投影
+    struct SwathProj { size_t idx; double proj; };
+    std::vector<SwathProj> sp;
+    sp.reserve(swaths.size());
+    for (size_t i = 0; i < swaths.size(); ++i) {
+        double cx = (swaths[i].startPoint().getX()
+                   + swaths[i].endPoint().getX()) * 0.5;
+        double cy = (swaths[i].startPoint().getY()
+                   + swaths[i].endPoint().getY()) * 0.5;
+        sp.push_back({i, cx * n_x + cy * n_y});
+    }
+
+    // 按法向投影排序
+    std::sort(sp.begin(), sp.end(),
+        [](const SwathProj& a, const SwathProj& b) {
+            return a.proj < b.proj;
+        });
+
+    std::set<size_t> to_remove;
+
+    // 检查最外层（法向最小端）
+    if (sp[0].proj - cell_min_p < safe_dist)
+        to_remove.insert(sp[0].idx);
+
+    // 检查最外层（法向最大端）
+    if (cell_max_p - sp.back().proj < safe_dist)
+        to_remove.insert(sp.back().idx);
+
+    if (to_remove.empty()) return 0;
+
+    // 安全约束：不移除全部 swath
+    if (swaths.size() <= to_remove.size()) return 0;
+
+    f2c::types::Swaths filtered;
+    for (size_t i = 0; i < swaths.size(); ++i) {
+        if (to_remove.count(i) == 0)
+            filtered.push_back(swaths[i]);
+    }
+    size_t n_removed = swaths.size() - filtered.size();
+    swaths = filtered;
+    return n_removed;
 }
 
 // ========== 双向 Swath 端点调整 ==========
@@ -343,7 +418,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                 fillBoundaryGaps(
                     cs, no_hl.getGeometry(ci), full_polygon,
                     best_ang, coverage_width,
-                    swath_endpoint_shrink_distance, 0.0,
+                    swath_endpoint_shrink_distance, r_w * 0.5,
                     boundary_fill_offset);
                 swaths_by_cells.push_back(cs);
             }
@@ -392,7 +467,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                         auto cs = local_swaths;
                         fillBoundaryGaps(cs, cell, full_polygon,
                             local_ang, coverage_width,
-                            swath_endpoint_shrink_distance, 0.0,
+                            swath_endpoint_shrink_distance, r_w * 0.5,
                             boundary_fill_offset);
                         size_t rm = 0;
                         cs = filterShortSwaths(cs, min_swath_length, rm);
@@ -431,7 +506,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
             cs = filterShortSwaths(cs, min_swath_length, rm);
             fillBoundaryGaps(
                 cs, sub, full_polygon, ang, coverage_width,
-                swath_endpoint_shrink_distance, 0.0,
+                swath_endpoint_shrink_distance, r_w * 0.5,
                 boundary_fill_offset);
             if (cs.size() == 0) {
                 return f2c::types::SwathsByCells();

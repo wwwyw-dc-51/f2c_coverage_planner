@@ -325,17 +325,31 @@ CellMergeResult mergeCellsWithSimilarDirection(
         }
     }
 
+    // 使用 union-find 替代原先的单次遍历，解决传递性合并遗漏
+    // （例如 C03→C08 合并后 C08 被 skip，C12 永远不会被合并进 C03 的 group）
     const double angle_threshold =
         std::clamp(angle_threshold_deg, 0.0, 90.0) * M_PI / 180.0;
-    std::vector<int> group(cell_count, -1);
-    int next_group = 0;
+
+    // Union-find 初始化
+    std::vector<size_t> parent(cell_count);
+    for (size_t i = 0; i < cell_count; ++i) parent[i] = i;
+    auto find = [&](size_t x) -> size_t {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    auto unite = [&](size_t a, size_t b) {
+        a = find(a); b = find(b);
+        if (a != b) parent[b] = a;
+    };
+
     for (size_t i = 0; i < cell_count; ++i) {
-        if (group[i] >= 0) continue;
-        group[i] = next_group++;
-
         for (size_t j = i + 1; j < cell_count; ++j) {
-            if (group[j] >= 0 || !adjacent[i][j]) continue;
+            if (!adjacent[i][j]) continue;
 
+            // 角度相似性检查
             double angle_i = cell_directions[i];
             while (angle_i < 0.0) angle_i += M_PI;
             while (angle_i >= M_PI) angle_i -= M_PI;
@@ -346,6 +360,7 @@ CellMergeResult mergeCellsWithSimilarDirection(
             if (angle_diff > M_PI / 2.0) angle_diff = M_PI - angle_diff;
             if (angle_diff >= angle_threshold) continue;
 
+            // 孔洞保护：质心连线不穿过孔洞边
             if (protect_hole_separation && full_polygon.size() > 1) {
                 const auto& ring_i =
                     cells.getGeometry(i).getExteriorRing();
@@ -426,8 +441,20 @@ CellMergeResult mergeCellsWithSimilarDirection(
                 }
             }
 
-            group[j] = group[i];
+            unite(i, j);
         }
+    }
+
+    // 将 union-find 结果映射为 group ID
+    std::vector<int> group(cell_count, -1);
+    int next_group = 0;
+    std::vector<size_t> root_to_group(cell_count, SIZE_MAX);
+    for (size_t i = 0; i < cell_count; ++i) {
+        size_t r = find(i);
+        if (root_to_group[r] == SIZE_MAX) {
+            root_to_group[r] = next_group++;
+        }
+        group[i] = static_cast<int>(root_to_group[r]);
     }
 
     if (next_group >= static_cast<int>(cell_count)) {
@@ -526,6 +553,104 @@ std::vector<double> extractDecompositionAngles(
         decomp_angles.push_back(da);
     }
     return decomp_angles;
+}
+
+// ── Sweep 分解条带合并：合并同 x-span 的相邻条带 ──
+// sweep 分解用所有孔洞顶点 Y 坐标做水平切割线，
+// 会把同一条带区域切成多段。此函数将这些碎片重新合并。
+// 关键：unionCascaded 合并后可能产生含 interior ring 的 cell，
+// 导致 swath generator 生成穿洞路径。合并后直接检查结果，有 interior ring 则回退。
+f2c::types::Cells mergeAdjacentSweepStrips(
+    const f2c::types::Cells& cells,
+    double /*coverage_width*/,
+    const std::vector<f2c::types::LinearRing>& /*holes*/)
+{
+    if (cells.size() <= 1) return cells;
+
+    const size_t n = cells.size();
+    constexpr double kXSpanTol = 0.05;  // 5cm x-span 匹配容差
+    constexpr double kVGapTol = 0.01;   // 1cm 垂直间隙容差
+
+    // 计算每个 cell 的 bbox
+    struct Span { double xmin, xmax, ymin, ymax; };
+    std::vector<Span> spans(n);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& ring = cells.getGeometry(i).getExteriorRing();
+        double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
+        for (size_t j = 0; j + 1 < ring.size(); ++j) {
+            double x = ring.getGeometry(j).getX();
+            double y = ring.getGeometry(j).getY();
+            xmin = std::min(xmin, x); xmax = std::max(xmax, x);
+            ymin = std::min(ymin, y); ymax = std::max(ymax, y);
+        }
+        spans[i] = {xmin, xmax, ymin, ymax};
+    }
+
+    // Union-find：同 x-span + 垂直相邻
+    std::vector<size_t> parent(n);
+    for (size_t i = 0; i < n; ++i) parent[i] = i;
+    auto find = [&](size_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    auto unite = [&](size_t a, size_t b) {
+        a = find(a); b = find(b);
+        if (a != b) parent[b] = a;
+    };
+
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            if (std::abs(spans[i].xmin - spans[j].xmin) > kXSpanTol) continue;
+            if (std::abs(spans[i].xmax - spans[j].xmax) > kXSpanTol) continue;
+            double vgap = std::max(spans[i].ymin - spans[j].ymax,
+                                   spans[j].ymin - spans[i].ymax);
+            if (vgap > kVGapTol) continue;
+            unite(i, j);
+        }
+    }
+
+    // 按组收集
+    std::vector<size_t> group_id(n, SIZE_MAX);
+    size_t group_cnt = 0;
+    for (size_t i = 0; i < n; ++i) {
+        size_t root = find(i);
+        if (group_id[root] == SIZE_MAX) group_id[root] = group_cnt++;
+    }
+
+    // 对每个 group，尝试合并；若合并后 cell 含 interior ring（size>1），回退保留原 cell
+    f2c::types::Cells result;
+    for (size_t g = 0; g < group_cnt; ++g) {
+        f2c::types::Cells group_cells;
+        for (size_t i = 0; i < n; ++i) {
+            if (group_id[find(i)] == g)
+                group_cells.addGeometry(cells.getGeometry(i));
+        }
+        if (group_cells.size() == 1) {
+            result.addGeometry(group_cells.getGeometry(0));
+        } else {
+            auto merged = group_cells.unionCascaded();
+            // 检查合并结果是否产生了含孔洞（interior ring）的 cell
+            bool has_interior = false;
+            for (size_t mi = 0; mi < merged.size() && !has_interior; ++mi) {
+                if (merged.getGeometry(mi).size() > 1)
+                    has_interior = true;
+            }
+            if (has_interior) {
+                // 合并会产生含孔洞的 cell，回退保留原始 cell
+                for (size_t i = 0; i < n; ++i) {
+                    if (group_id[find(i)] == g)
+                        result.addGeometry(cells.getGeometry(i));
+                }
+            } else {
+                for (size_t mi = 0; mi < merged.size(); ++mi)
+                    result.addGeometry(merged.getGeometry(mi));
+            }
+        }
+    }
+    return result;
 }
 
 }  // namespace yingshi

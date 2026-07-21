@@ -73,6 +73,28 @@ f2c::types::Robot makeRobot(const PlanningRequest& req)
     return robot;
 }
 
+// ── 为单个 cell 生成 swaths ──
+void generateSwathsForCell(
+    const f2c::types::Cell& cell,
+    const f2c::types::Cell& full_polygon,
+    const PlanningRequest& req,
+    double r_w,
+    f2c::sg::BruteForce& swath_gen,
+    f2c::types::SwathsByCells& out)
+{
+    double ang = computeCellMainDirection(cell);
+    auto swaths = swath_gen.generateSwaths(ang, r_w, cell);
+
+    size_t removed = 0;
+    swaths = filterShortSwaths(swaths, req.min_swath_length, removed);
+
+    fillBoundaryGaps(swaths, cell, full_polygon, ang,
+                     r_w,
+                     req.swath_endpoint_shrink_distance);
+
+    if (swaths.size() > 0) out.push_back(swaths);
+}
+
 // ── Snake 模式直连路由 ──
 f2c::types::Route buildSnakeRoute(
     const f2c::types::SwathsByCells& swaths_by_cells,
@@ -140,6 +162,13 @@ PlanningComponentResult planSingleComponent(
     result.planning_polygon = req.polygon;
     result.coverage_target = coverage_target;
     auto t0 = std::chrono::steady_clock::now();
+    auto t_last = t0;
+    auto lap = [&](const char* label) {
+        auto now = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(now - t_last).count();
+        fprintf(stderr, "[Core] %s: %.1f ms\n", label, ms);
+        t_last = now;
+    };
 
     try {
         // ── 1. 构建 Robot ──
@@ -265,6 +294,7 @@ PlanningComponentResult planSingleComponent(
             result.error_message = "Decomposition produced zero cells";
             return result;
         }
+        lap("2.headlands+decomp");
 
         // 先合并同向 cell（让微 cell 有机会被邻居吸收），再过滤孤立碎 cell
         if (no_hl.size() > 1) {
@@ -274,6 +304,8 @@ PlanningComponentResult planSingleComponent(
                 no_hl, req.polygon, req.coverage_width,
                 merge_angle_threshold, req.use_sweep_decomp).cells;
         }
+
+        // Sweep 分解条带合并已由 mergeCellsWithSimilarDirection 的 union-find 覆盖
 
         if (req.filter_tiny_cells) {
             const double min_cell_area =
@@ -298,10 +330,16 @@ PlanningComponentResult planSingleComponent(
             result.error_message = "No swaths generated";
             return result;
         }
+        fprintf(stderr, "[Core] swaths_by_cells: %zu groups, %zu total swaths\n",
+                swaths_by_cells.size(), swaths_by_cells.sizeTotal());
+        for (size_t gi = 0; gi < swaths_by_cells.size(); ++gi)
+            fprintf(stderr, "[Core]   group[%zu]: %zu swaths\n", gi, swaths_by_cells.at(gi).size());
+        lap("3.swath_gen");
 
         // ── 4. 去重接缝补线 ──
         pruneRedundantCellSeamFills(
             swaths_by_cells, no_hl, req.polygon, req.coverage_width);
+        lap("4.prune_fills");
 
         // ── 5. 孔洞裁剪 ──
         // （当前未实现 standalone splitSwathsCrossingHoles；
@@ -316,6 +354,14 @@ PlanningComponentResult planSingleComponent(
             greedyCellOrder(swaths_by_cells, cell_order, req.holes,
                             req.swath_order_type);
         }
+        fprintf(stderr, "[Core] after greedyCellOrder: %zu groups, order=[",
+                swaths_by_cells.size());
+        for (size_t i = 0; i < cell_order.size(); ++i) {
+            fprintf(stderr, "%s%zu(%zu sw)", i?", ":"", cell_order[i],
+                    cell_order[i] < swaths_by_cells.size() ? swaths_by_cells.at(cell_order[i]).size() : 0);
+        }
+        fprintf(stderr, "]\n");
+        lap("6.greedy_cell_order");
 
         // ── 7. 构建 Route ──
         f2c::types::Route route;
@@ -324,6 +370,41 @@ PlanningComponentResult planSingleComponent(
         } else {
             f2c::rp::RoutePlannerBase route_planner;
             route = route_planner.genRoute(mid_hl, swaths_by_cells);
+        }
+        fprintf(stderr, "[Core] route: %zu swath_groups, %zu connections\n",
+                route.sizeVectorSwaths(), route.sizeConnections());
+        lap("7.gen_route");
+
+        // ── 7.5. 边界策略：闭合边界下收缩 swath 端点 ──
+        {
+            double margin = 0.0;
+            if (req.boundary_type == "closed") {
+                margin = req.swath_endpoint_shrink_distance;
+            } else if (req.boundary_type == "open") {
+                margin = req.boundary_coverage_margin;
+            } else {
+                margin = req.boundary_coverage_margin;
+            }
+            if (std::abs(margin) > 1e-9) {
+                const auto& outer_ring = req.polygon.getExteriorRing();
+                std::vector<f2c::types::LinearRing> hole_rings;
+                for (size_t hi = 0; hi + 1 < req.polygon.size(); ++hi) {
+                    hole_rings.push_back(req.polygon.getInteriorRing(hi));
+                }
+                for (size_t i = 0; i < route.sizeVectorSwaths(); ++i) {
+                    f2c::types::Swaths& rs = route.getSwaths(i);
+                    f2c::types::Swaths adjusted;
+                    for (size_t j = 0; j < rs.size(); ++j) {
+                        adjusted.push_back(
+                            adjustSwathEndpointsForBoundaryClearance(
+                                rs.at(j), outer_ring, hole_rings,
+                                req.coverage_width, margin));
+                    }
+                    route.setSwaths(i, adjusted);
+                }
+                synchronizeRouteConnectionEndpoints(
+                    route, 2.0 * std::abs(margin));
+            }
         }
 
         // ── 8. 孔洞感知修复（genRoute 后立即修）──
@@ -357,10 +438,16 @@ PlanningComponentResult planSingleComponent(
         }
 
         // ── 9.5. 边界调整后最终孔洞修复 ──
+        // 注意：clearance 必须足够大，避免 walkHoleBoundary 沿孔洞边界贴边行走。
+        // 之前的 0.001 会让绕洞路径几乎贴在孔洞边界上，造成贴边贴角问题。
+        // robot_width * 0.15 ≈ 0.11m 用于导航安全净空。
         if (!req.holes.empty()) {
+            const double final_hole_clearance =
+                cspace_constrained ? 1e-4 : req.robot_width * 0.15;
             repairRouteConnectionsAroundHoles(
-                route, req.holes, 0.001);
+                route, req.holes, final_hole_clearance);
         }
+        lap("8.hole_repair");
 
         // ── 9. 路径规划 ──
         f2c::types::Path path;
@@ -380,6 +467,7 @@ PlanningComponentResult planSingleComponent(
             // direct：零半径欧氏直连（默认）
             path = planDirectPath(route, 1.0);
         }
+        lap("9.path_planning");
 
         // ── 10. 路径后处理 ──
         if (req.path_simplify_enabled && path.size() > 0) {
@@ -389,6 +477,7 @@ PlanningComponentResult planSingleComponent(
             path = f2c::types::Path();
             for (auto& s : states) path.addState(s);
         }
+        lap("10.rdp_simplify");
 
         // ── 11. 展平路径 + 诊断 ──
         result.path = path;
@@ -415,6 +504,7 @@ PlanningComponentResult planSingleComponent(
             result.error_message =
                 "Planned path leaves the C-space planning area";
         }
+        lap("11.materialize+diag");
 
         // ── 12. 组装结果 ──
         result.cells_with_swaths = swaths_by_cells;

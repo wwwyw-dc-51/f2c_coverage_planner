@@ -337,7 +337,8 @@ void fillBoundaryGaps(
     const double boundary_offset = boundary_offset_override >= 0.0
         ? boundary_offset_override
         : cov_width * 0.5;
-    (void)robot_half_width;  // 保留接口兼容性，当前不参与边界补线偏移。
+    // robot_half_width > 0 时启用距离感知 skip 检查
+    // （防止贴边过近的 swath 拦截边界补线）
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
@@ -397,6 +398,8 @@ void fillBoundaryGaps(
     // 移除 touches_outer 整体门控，改为逐边独立判断。
     // 原因：cell 经 GDAL 操作后顶点可能与 polygon 顶点略有偏差，
     // vertex-to-vertex 距离门控会误杀实际贴边的 cell。
+    // 贴边 swath 仅触发补线，不修改原 swath
+    // （任何 swath 位置/数量改动都会影响复杂孔洞场景的 routing 拓扑）
     {
         for (size_t pi = 0; pi + 1 < poly_ring.size(); ++pi)
         {
@@ -513,7 +516,9 @@ void fillBoundaryGaps(
                         normalDistance(
                             0.5 * (sx1 + sx2),
                             0.5 * (sy1 + sy2))});
-                    if (max_normal_distance > boundary_offset + 1e-6) continue;
+                    // 候选范围：覆盖能触达边界即可（boundary_offset + robot_half_width）
+                    if (max_normal_distance > boundary_offset
+                        + robot_half_width + 1e-6) continue;
 
                     const double swath_along_1 =
                         (sx1 - px1) * edge_ux + (sy1 - py1) * edge_uy;
@@ -525,11 +530,36 @@ void fillBoundaryGaps(
                             seg_along_min,
                             std::min(swath_along_1, swath_along_2));
                     if (overlap >= seg_len - cov_width - 1e-6) {
+                        if (robot_half_width <= 0.0) {
+                            // 未传入 robot_half_width：保持旧行为
+                            boundary_already_covered = true;
+                            break;
+                        }
+                        // 安全：swath 不能太近（机器人越界）
+                        if (max_normal_distance < robot_half_width - 1e-6) {
+                            continue;  // 太近 → 不覆盖 → 触发补线
+                        }
+                        // 覆盖：swath 不能太远（覆盖不到或间隙太大）
+                        if (max_normal_distance > boundary_offset
+                            + robot_half_width + 1e-6) {
+                            continue;  // 太远 → 不覆盖 → 触发补线
+                        }
                         boundary_already_covered = true;
                         break;
                     }
                 }
                 if (boundary_already_covered) continue;
+
+                // 跳过与主 swath 方向偏差 >10° 的边界段，防止产生斜向补线
+                {
+                    double fdx = seg.getGeometry(1).getX() - seg.getGeometry(0).getX();
+                    double fdy = seg.getGeometry(1).getY() - seg.getGeometry(0).getY();
+                    double flen = std::hypot(fdx, fdy);
+                    if (flen > 1e-9) {
+                        double fparallel = std::abs(fdx * s_dx + fdy * s_dy) / flen;
+                        if (fparallel < 0.9848) continue;  // cos(10°)
+                    }
+                }
 
                 f2c::types::Swath fill_sw(seg, cov_width);
 
