@@ -62,7 +62,6 @@ private:
     double decomposition_angle_;  // Boustrophedon 分解角度
     double mid_hl_width_ratio_;  // mid_hl 宽度比例（相对于覆盖宽度）
     double no_hl_width_ratio_;   // no_hl 宽度比例（相对于覆盖宽度）
-    double headland_reference_width_;  // headland 侵蚀参考宽度（临时解耦 robot_width）
     double min_hole_area_;       // 兼容旧参数；物理障碍不再按面积静默过滤
     bool traversability_enabled_;
     double cspace_clearance_margin_;
@@ -114,7 +113,6 @@ public:
         this->declare_parameter("decomposition_angle", 0.0);  // Boustrophedon 分解角度（弧度），默认0度（沿X轴方向）
         this->declare_parameter("mid_hl_width_ratio", 0.20);  // mid_hl 宽度比例（相对于覆盖宽度）
         this->declare_parameter("no_hl_width_ratio", 0.0);   // no_hl 宽度比例（相对于覆盖宽度）
-        this->declare_parameter("headland_reference_width", 0.75);  // headland 侵蚀参考宽度（临时解耦 robot_width）
         this->declare_parameter("min_hole_area", 0.0);       // 已废弃：所有合法物理孔洞均保留
         this->declare_parameter("traversability_enabled", false);
         this->declare_parameter("cspace_clearance_margin", 0.0);
@@ -412,7 +410,6 @@ private:
         double decomposition_angle;
         double mid_hl_width_ratio;
         double no_hl_width_ratio;
-        double headland_reference_width;
         double min_hole_area;
         bool traversability_enabled;
         double cspace_clearance_margin;
@@ -491,7 +488,6 @@ private:
         config.runtime.decomposition_angle = state.decomposition_angle;
         config.runtime.mid_hl_width_ratio = state.mid_hl_width_ratio;
         config.runtime.no_hl_width_ratio = state.no_hl_width_ratio;
-        config.runtime.headland_reference_width = state.headland_reference_width;
         config.runtime.min_hole_area = state.min_hole_area;
         config.runtime.cspace_clearance_margin =
             state.cspace_clearance_margin;
@@ -553,7 +549,6 @@ private:
         state.decomposition_angle = get_double("decomposition_angle");
         state.mid_hl_width_ratio = get_double("mid_hl_width_ratio");
         state.no_hl_width_ratio = get_double("no_hl_width_ratio");
-        state.headland_reference_width = get_double("headland_reference_width");
         state.min_hole_area = get_double("min_hole_area");
         state.traversability_enabled =
             get_bool("traversability_enabled");
@@ -615,7 +610,6 @@ private:
         decomposition_angle_ = state.decomposition_angle;
         mid_hl_width_ratio_ = state.mid_hl_width_ratio;
         no_hl_width_ratio_ = state.no_hl_width_ratio;
-        headland_reference_width_ = state.headland_reference_width;
         min_hole_area_ = state.min_hole_area;
         traversability_enabled_ = state.traversability_enabled;
         cspace_clearance_margin_ = state.cspace_clearance_margin;
@@ -663,7 +657,6 @@ private:
             state.decomposition_angle == decomposition_angle_ &&
             state.mid_hl_width_ratio == mid_hl_width_ratio_ &&
             state.no_hl_width_ratio == no_hl_width_ratio_ &&
-            state.headland_reference_width == headland_reference_width_ &&
             state.min_hole_area == min_hole_area_ &&
             state.traversability_enabled == traversability_enabled_ &&
             state.cspace_clearance_margin == cspace_clearance_margin_ &&
@@ -1791,7 +1784,6 @@ private:
         json << "],\n  \"cells\": [";
         // 使用各 component 的 decomposition_cells（真实分解 cell）
         // 而非 planning_polygon（C-space 收缩后外边界，只反映分量轮廓）
-        // 同时跟踪 global_cell_offset 供 connections 使用
         {
             std::size_t global_cell_id = 0;
             for (std::size_t comp_idx = 0;
@@ -1809,81 +1801,23 @@ private:
                         json << "[" << ring.getGeometry(point).getX()
                              << "," << ring.getGeometry(point).getY() << "]";
                     }
-                    json << "]";
-                    // 入口/出口点 + swath_count + area
-                    if (ci < swaths_by_cells.size()
-                        && swaths_by_cells.at(ci).size() > 0) {
-                        const auto& swaths_cell = swaths_by_cells.at(ci);
-                        const auto& e = swaths_cell.at(0).startPoint();
-                        json << ",\"entry\":{\"x\":" << e.getX()
-                             << ",\"y\":" << e.getY() << "}";
-                        const auto& x = swaths_cell.at(
-                            swaths_cell.size() - 1).endPoint();
-                        json << ",\"exit\":{\"x\":" << x.getX()
-                             << ",\"y\":" << x.getY() << "}";
-                        json << ",\"swath_count\":" << swaths_cell.size();
-                        json << ",\"area\":" << dc.getGeometry(ci).area();
-                    } else {
-                        json << ",\"swath_count\":0"
-                             << ",\"area\":" << dc.getGeometry(ci).area();
+                    std::size_t cell_swath_count = 0;
+                    if (ci < swaths_by_cells.size()) {
+                        cell_swath_count = swaths_by_cells.at(ci).size();
                     }
-                    json << "}";
+                    json << "],\"swath_count\":" << cell_swath_count
+                         << ",\"area\":" << dc.getGeometry(ci).area() << "}";
                     ++global_cell_id;
                 }
             }
         }
         if (!result.component_plans.empty()) json << "\n  ";
         json << "],\n  \"connections\": [";
-        // 从各 component 的 route 提取 cell 间连接 + 路径控制点
-        {
-            std::size_t global_cell_offset = 0;
-            bool first_conn = true;
-            for (std::size_t comp_idx = 0;
-                 comp_idx < result.component_plans.size(); ++comp_idx) {
-                const auto& comp = result.component_plans[comp_idx];
-                const auto& route = comp.route;
-                const auto& swaths_by_cells = comp.cells_with_swaths;
-                const std::size_t num_cells =
-                    comp.decomposition_cells.size();
-                const std::size_t num_route_groups =
-                    route.sizeVectorSwaths();
-                const std::size_t num_route_connections =
-                    route.sizeConnections();
-                for (std::size_t ci = 1;
-                     ci < num_route_groups
-                     && ci < num_route_connections
-                     && ci < num_cells;
-                     ++ci) {
-                    const auto& prev_swaths = route.getSwaths(ci - 1);
-                    const auto& next_swaths = route.getSwaths(ci);
-                    if (prev_swaths.size() == 0
-                        || next_swaths.size() == 0) continue;
-                    const auto& from_pt = prev_swaths.at(
-                        prev_swaths.size() - 1).endPoint();
-                    const auto& to_pt = next_swaths.at(0).startPoint();
-                    const auto& connection = route.getConnection(ci);
-                    if (!first_conn) json << ",";
-                    first_conn = false;
-                    json << "\n    {\"from_cell\":"
-                         << (global_cell_offset + ci - 1)
-                         << ",\"to_cell\":"
-                         << (global_cell_offset + ci)
-                         << ",\"source\":\"route_waypoints\""
-                         << ",\"path\":[["
-                         << from_pt.getX() << ","
-                         << from_pt.getY() << "]";
-                    for (std::size_t pi = 0;
-                         pi < connection.size(); ++pi) {
-                        const auto& point =
-                            connection.getGeometry(pi);
-                        json << ",[" << point.getX()
-                             << "," << point.getY() << "]";
-                    }
-                    json << ",[" << to_pt.getX()
-                         << "," << to_pt.getY() << "]]}";
-                }
-                global_cell_offset += num_cells;
-            }
+        // 从 route 的连接信息生成 cell 间连接
+        for (std::size_t conn = 0; conn < result.total_connections; ++conn) {
+            if (conn > 0) json << ",";
+            json << "\n    {\"from_cell\":" << conn
+                 << ",\"to_cell\":" << (conn + 1) << "}";
         }
         if (result.total_connections > 0) json << "\n  ";
         json << "],\n  \"cspace\": {"
@@ -1961,7 +1895,6 @@ private:
         // Headland 参数
         req.mid_hl_width_ratio = mid_hl_width_ratio_;
         req.no_hl_width_ratio = no_hl_width_ratio_;
-        req.headland_reference_width = headland_reference_width_;
 
         // Swath 参数
         req.swath_overlap_ratio = swath_overlap_ratio_;

@@ -239,6 +239,7 @@ def render_connections(scenario_name, outer, holes, cells_data, connections_data
             tx, ty = conn['to']['x'], conn['to']['y']
             ax.plot([fx, tx], [fy, ty], '--', color='#c8404a', lw=2, alpha=0.8)
         # 连接标注
+        path = conn.get('path', [])
         if len(path) >= 2:
             mid = len(path) // 2
             ax.text(path[mid][0], path[mid][1],

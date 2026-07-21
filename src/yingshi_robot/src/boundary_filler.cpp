@@ -317,99 +317,6 @@ f2c::types::Swath adjustSwathEndpointsForBoundaryClearance(
     return adjusted;
 }
 
-// ========== 自适应端点缩进（Robot Footprint 感知 — 精确一步缩进版）==========
-// 用 robot 四角 point-in-polygon 检测 + F2C createLineUntilBorder 精确求交，
-// 一步计算出精确缩进距离（替代循环试探），区分沿轨/垂轨方向。
-f2c::types::Swath adjustSwathEndpointsAdaptive(
-    const f2c::types::Swath& swath,
-    const f2c::types::LinearRing& outer_ring,
-    const std::vector<f2c::types::LinearRing>& hole_rings,
-    double robot_half_length,
-    double robot_half_width,
-    double shrink_distance)
-{
-    if (shrink_distance == 0.0 || (robot_half_length <= 0.0 && robot_half_width <= 0.0))
-        return swath;
-
-    const auto orig_start = swath.startPoint();
-    const auto orig_end = swath.endPoint();
-    const double dx = orig_end.getX() - orig_start.getX();
-    const double dy = orig_end.getY() - orig_start.getY();
-    const double length = std::hypot(dx, dy);
-    if (length < 1e-9) return swath;
-
-    const double unit_dx = dx / length;
-    const double unit_dy = dy / length;
-    const double perp_dx = -unit_dy;  // 垂轨方向
-    const double perp_dy = unit_dx;
-    const double swath_angle = std::atan2(unit_dy, unit_dx);
-
-    // 构造临时 Cell 用于 F2C 边界求交（外环 + 所有孔洞）
-    f2c::types::Cell polygon_cell(outer_ring);
-    for (const auto& hole : hole_rings) {
-        polygon_cell.addRing(hole);
-    }
-
-    // 计算单个端点的精确缩进距离：对越界的四角用 createLineUntilBorder
-    // 沿 swath 方向向内射一条线，求与 polygon 边界的交点，距离 = 缩进量
-    // interior_dir: 指向 swath 内部的方向角（start→+dir, end→+dir+π）
-    auto computeMargin = [&](double cx, double cy, double interior_angle) -> double {
-        double max_margin = 0.0;
-        for (double sa : {-1.0, 1.0}) {      // 沿轨正/反
-            for (double sp : {-1.0, 1.0}) {  // 垂轨左/右
-                double rx = cx + sa * robot_half_length * unit_dx
-                              + sp * robot_half_width * perp_dx;
-                double ry = cy + sa * robot_half_length * unit_dy
-                              + sp * robot_half_width * perp_dy;
-                // 检查该角是否越界
-                if (!pointInPolygon(rx, ry, outer_ring)
-                    || pointInAnyHole(rx, ry, hole_rings)) {
-                    // 精确求交：从角点沿 interior 方向射向 polygon 内部
-                    f2c::types::Point corner(rx, ry);
-                    auto ray = polygon_cell.createLineUntilBorder(
-                        corner, interior_angle);
-                    if (ray.size() >= 2) {
-                        double d = ray.endPoint().distance(corner);
-                        if (d > max_margin) max_margin = d;
-                    } else {
-                        // 回退：找不到交点时用 shrink_distance 循环试探
-                        max_margin = std::max(max_margin, shrink_distance * 10.0);
-                    }
-                }
-            }
-        }
-        return max_margin;
-    };
-
-    // start 端点：interior 方向为 +swath_angle（沿 swath 向前）
-    double start_margin = computeMargin(
-        orig_start.getX(), orig_start.getY(), swath_angle);
-    // end 端点：interior 方向为 swath_angle + π（沿 swath 向后）
-    double end_margin = computeMargin(
-        orig_end.getX(), orig_end.getY(), swath_angle + M_PI);
-
-    // 安全 clamp：缩进量不超过 shrink_distance 的最大合理值
-    start_margin = std::min(start_margin, shrink_distance * 10.0);
-    end_margin = std::min(end_margin, shrink_distance * 10.0);
-
-    if (start_margin < 1e-9 && end_margin < 1e-9)
-        return swath;
-    if (length - start_margin - end_margin <= 1e-9)
-        return swath;
-
-    f2c::types::LineString adjusted_path;
-    adjusted_path.addPoint(f2c::types::Point(
-        orig_start.getX() + start_margin * unit_dx,
-        orig_start.getY() + start_margin * unit_dy));
-    adjusted_path.addPoint(f2c::types::Point(
-        orig_end.getX() - end_margin * unit_dx,
-        orig_end.getY() - end_margin * unit_dy));
-    f2c::types::Swath adjusted(
-        adjusted_path, swath.getWidth(), swath.getId(), swath.getType());
-    adjusted.setCreationDir(swath.getCreationDir());
-    return adjusted;
-}
-
 // ========== 边界间隙补填（完整版，v8/v9 成熟实现）==========
 void fillBoundaryGaps(
     f2c::types::Swaths& cell_swaths,
@@ -426,17 +333,11 @@ void fillBoundaryGaps(
     if (cell_ring.size() < 3) return;
     const auto& poly_ring = full_polygon.getExteriorRing();
 
-    // 边界补线偏移：优先使用外部覆盖值，否则默认 cov_width/2
-    // 机器人本体安全约束：补线中心必须 >= robot_half_width 从边界向内偏移，
-    // 确保机器人四角不越界。
-    double boundary_offset = boundary_offset_override >= 0.0
+    // 此偏移只保证覆盖工具贴边；机器人外形净空需要单独校验。
+    const double boundary_offset = boundary_offset_override >= 0.0
         ? boundary_offset_override
         : cov_width * 0.5;
-    if (robot_half_width > 0.0 && boundary_offset < robot_half_width) {
-        boundary_offset = robot_half_width;
-    }
-    // robot_half_width > 0 时启用距离感知 skip 检查
-    // （防止贴边过近的 swath 拦截边界补线）
+    (void)robot_half_width;  // 保留接口兼容性，当前不参与边界补线偏移。
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
@@ -496,8 +397,6 @@ void fillBoundaryGaps(
     // 移除 touches_outer 整体门控，改为逐边独立判断。
     // 原因：cell 经 GDAL 操作后顶点可能与 polygon 顶点略有偏差，
     // vertex-to-vertex 距离门控会误杀实际贴边的 cell。
-    // 贴边 swath 仅触发补线，不修改原 swath
-    // （任何 swath 位置/数量改动都会影响复杂孔洞场景的 routing 拓扑）
     {
         for (size_t pi = 0; pi + 1 < poly_ring.size(); ++pi)
         {
@@ -614,9 +513,7 @@ void fillBoundaryGaps(
                         normalDistance(
                             0.5 * (sx1 + sx2),
                             0.5 * (sy1 + sy2))});
-                    // 候选范围：覆盖能触达边界即可（boundary_offset + robot_half_width）
-                    if (max_normal_distance > boundary_offset
-                        + robot_half_width + 1e-6) continue;
+                    if (max_normal_distance > boundary_offset + 1e-6) continue;
 
                     const double swath_along_1 =
                         (sx1 - px1) * edge_ux + (sy1 - py1) * edge_uy;
@@ -628,36 +525,11 @@ void fillBoundaryGaps(
                             seg_along_min,
                             std::min(swath_along_1, swath_along_2));
                     if (overlap >= seg_len - cov_width - 1e-6) {
-                        if (robot_half_width <= 0.0) {
-                            // 未传入 robot_half_width：保持旧行为
-                            boundary_already_covered = true;
-                            break;
-                        }
-                        // 安全：swath 不能太近（机器人越界）
-                        if (max_normal_distance < robot_half_width - 1e-6) {
-                            continue;  // 太近 → 不覆盖 → 触发补线
-                        }
-                        // 覆盖：swath 不能太远（覆盖不到或间隙太大）
-                        if (max_normal_distance > boundary_offset
-                            + robot_half_width + 1e-6) {
-                            continue;  // 太远 → 不覆盖 → 触发补线
-                        }
                         boundary_already_covered = true;
                         break;
                     }
                 }
                 if (boundary_already_covered) continue;
-
-                // 跳过与主 swath 方向偏差 >10° 的边界段，防止产生斜向补线
-                {
-                    double fdx = seg.getGeometry(1).getX() - seg.getGeometry(0).getX();
-                    double fdy = seg.getGeometry(1).getY() - seg.getGeometry(0).getY();
-                    double flen = std::hypot(fdx, fdy);
-                    if (flen > 1e-9) {
-                        double fparallel = std::abs(fdx * s_dx + fdy * s_dy) / flen;
-                        if (fparallel < 0.9848) continue;  // cos(10°)
-                    }
-                }
 
                 f2c::types::Swath fill_sw(seg, cov_width);
 
