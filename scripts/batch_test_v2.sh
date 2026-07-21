@@ -22,8 +22,21 @@ declare -A SCENARIOS=(
     ["S4"]="$TEST_POLYGONS/S4_S4_narrow_corridor.yaml"
     ["S5"]="$TEST_POLYGONS/S5_S5_irregular.yaml"
     ["S6"]="$TEST_POLYGONS/S6_S6_multi_region.yaml"
-    ["S8"]="$F2C_AREAS/notched_10m_with_center_hole.yaml"
     ["S7"]="$TEST_POLYGONS/S7_S7_factory_workshop.yaml"
+    ["S8"]="$F2C_AREAS/notched_10m_with_center_hole.yaml"
+    ["N1_ring"]="$TEST_POLYGONS/ring.yaml"
+    ["N2_oblique"]="$TEST_POLYGONS/oblique_with_round_hole.yaml"
+    ["N3_dense"]="$TEST_POLYGONS/dense_shelves.yaml"
+    ["N4_wmixed"]="$TEST_POLYGONS/warehouse_mixed_shelves.yaml"
+    ["N5_ucorr"]="$TEST_POLYGONS/u_corridor.yaml"
+    ["N6_llarge"]="$TEST_POLYGONS/l_shape_large.yaml"
+    ["N7_gate"]="$TEST_POLYGONS/gate_shape.yaml"
+    ["N8_ushape"]="$TEST_POLYGONS/u_shape.yaml"
+    ["N9_wshelv"]="$TEST_POLYGONS/warehouse_shelves.yaml"
+    ["N10_whoriz"]="$TEST_POLYGONS/warehouse_horiz_shelves.yaml"
+    ["N11_whole"]="$TEST_POLYGONS/warehouse_shelves_with_hole.yaml"
+    ["N12_lware"]="$TEST_POLYGONS/large_warehouse.yaml"
+    ["N13_robs"]="$TEST_POLYGONS/rect_multi_obstacles.yaml"
 )
 
 PLANNER_PARAMS=(
@@ -68,7 +81,7 @@ cleanup_ros() {
 }
 
 echo "========================================="
-echo "  F2C 8场景批量测试 v2"
+echo "  F2C 21场景批量测试 v2"
 echo "  输出: $RESULT_DIR"
 echo "========================================="
 
@@ -77,7 +90,7 @@ COVERAGE_THRESHOLD=0.99  # 产品验收门槛 99%
 VIS_JSON="/tmp/f2c_vis_polygon_1.json"
 GRID_JSON="/tmp/f2c_grid_polygon_1.json"
 
-for NAME in S1 S2 S3 S4 S5 S6 S7 S8; do
+for NAME in $ALL_SCENARIOS; do
     YAML="${SCENARIOS[$NAME]}"
     echo ""
     echo "=== [$NAME] $(date +%H:%M:%S) ==="
@@ -427,7 +440,7 @@ echo "========================================="
 cleanup_ros
 
 # 渲染所有场景
-for NAME in S1 S2 S3 S4 S5 S6 S7 S8; do
+for NAME in $ALL_SCENARIOS; do
     YAML="${SCENARIOS[$NAME]}"
     DATA_FILE="$RESULT_DIR/${NAME}_data.json"
     PNG_FILE="$RESULT_DIR/${NAME}_coverage.png"
@@ -454,14 +467,14 @@ rd = sys.argv[1]
 lines = []
 lines.append("")
 lines.append("="*70)
-lines.append("  F2C 8场景覆盖规划 — 批量测试报告")
+lines.append("  F2C 21场景覆盖规划 — 批量测试报告")
 lines.append("="*70)
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 lines.append(f"生成时间: {now}")
 lines.append("")
 lines.append("| 场景 | 面积 | 覆盖率 | 修正覆盖率 | 得分 | 未覆盖 | 路径长 | 重叠率 | 耗时 |")
 lines.append("|:----:|:----:|:-----:|:--------:|:----:|:-----:|:-----:|:-----:|:---:|")
-for n in ['S1','S2','S3','S4','S5','S6','S7','S8']:
+for n in ['S1','S2','S3','S4','S5','S6','S7','S8','N1_ring','N2_oblique','N3_dense','N4_wmixed','N5_ucorr','N6_llarge','N7_gate','N8_ushape','N9_wshelv','N10_whoriz','N11_whole','N12_lware','N13_robs']:
     df = f'{rd}/{n}_data.json'
     if os.path.exists(df):
         with open(df) as f:
@@ -509,5 +522,5 @@ if [ $ERRORS -gt 0 ]; then
     echo "❌ $ERRORS scenario(s) failed (crash/timeout/missing data)"
     exit 1
 fi
-echo "✅ All 8 scenarios passed, no failures."
+echo "✅ All 21 scenarios passed, no failures."
 exit 0
