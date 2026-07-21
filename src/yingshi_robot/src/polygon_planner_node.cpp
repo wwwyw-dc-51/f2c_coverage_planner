@@ -2602,23 +2602,8 @@ private:
                 no_hl = simplifyCells(no_hl, 5.0, 0.5);
             }
 
-            // ── Cell 合并：先合并同向 cell（让微 cell 有机会被邻居吸收），再过滤孤立碎 cell ──
-            if (use_optimized_planner_ && no_hl.size() > 1) {
-                const size_t cell_count_before = no_hl.size();
-                const double merge_angle_threshold =
-                    use_sweep_decomp_ ? 60.0 : merge_angle_threshold_;
-                auto merge_result = yingshi::mergeCellsWithSimilarDirection(
-                    no_hl, cell, coverage_width_, merge_angle_threshold,
-                    coverage_width_ * 0.15);  // 共享边 ≥ 13.5cm 才合并
-                no_hl = std::move(merge_result.cells);
-                if (merge_result.merged_count > 0) {
-                    RCLCPP_INFO(this->get_logger(),
-                        "Cell merging: %zu cells → %zu cells "
-                        "(%zu merged, angle threshold=%.0f°)",
-                        cell_count_before, no_hl.size(),
-                        merge_result.merged_count, merge_angle_threshold);
-                }
-            }
+            // ── Cell 合并已迁移至 PlannerCore::plan()（侵蚀前合并，共享边完整）──
+            // legacy 路径保留代码供参考，见 legacy-dual-pipeline 分支
 
             // ── 优化步骤：过滤孤立微小子区域 ──
             if (use_optimized_planner_ && filter_tiny_cells_) {

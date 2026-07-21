@@ -229,24 +229,26 @@ PlanningComponentResult planSingleComponent(
                     decomposed = rectilinearDecompose(work_cell, grid_cell, dparams);
                 }
 
-                // ★ 先合并分解 cell（侵蚀前，共享边完整），再逐 cell 侵蚀
-                f2c::types::Cells cells_to_erode;
-                if (decomposed.size() > 1) {
-                    const double merge_angle = req.use_sweep_decomp
-                        ? 60.0 : req.merge_angle_threshold;
-                    const double min_shared = req.coverage_width * 0.15;
-                    auto merge_result = mergeCellsWithSimilarDirection(
-                        decomposed, req.polygon, req.coverage_width,
-                        merge_angle, min_shared);
-                    cells_to_erode = std::move(merge_result.cells);
-                } else {
-                    cells_to_erode = decomposed;
-                }
-
+                // ★ 先过滤碎 cell，再合并（侵蚀前共享边完整），最后逐 cell 侵蚀
+                f2c::types::Cells cells_to_merge = decomposed;
                 if (req.filter_tiny_cells) {
                     const double min_cell_area =
                         req.min_cell_area_ratio * req.coverage_width * req.robot_width;
-                    cells_to_erode = filterTinyCells(cells_to_erode, min_cell_area);
+                    cells_to_merge = filterTinyCells(cells_to_merge, min_cell_area);
+                }
+
+                f2c::types::Cells cells_to_erode;
+                if (cells_to_merge.size() > 1) {
+                    const double merge_angle = req.use_sweep_decomp
+                        ? 60.0 : req.merge_angle_threshold;
+                    // 共享边 ≥ coverage_width*0.5 才合并，避免碎片
+                    const double min_shared = req.coverage_width * 0.50;
+                    auto merge_result = mergeCellsWithSimilarDirection(
+                        cells_to_merge, req.polygon, req.coverage_width,
+                        merge_angle, min_shared);
+                    cells_to_erode = std::move(merge_result.cells);
+                } else {
+                    cells_to_erode = cells_to_merge;
                 }
 
                 // 逐 cell 自适应 no_hl 侵蚀
