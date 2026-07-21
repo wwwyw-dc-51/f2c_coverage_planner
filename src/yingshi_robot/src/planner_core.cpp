@@ -229,29 +229,7 @@ PlanningComponentResult planSingleComponent(
                     decomposed = rectilinearDecompose(work_cell, grid_cell, dparams);
                 }
 
-                // ★ 先过滤碎 cell，再合并（侵蚀前共享边完整），最后逐 cell 侵蚀
-                f2c::types::Cells cells_to_merge = decomposed;
-                if (req.filter_tiny_cells) {
-                    const double min_cell_area =
-                        req.min_cell_area_ratio * req.coverage_width * req.robot_width;
-                    cells_to_merge = filterTinyCells(cells_to_merge, min_cell_area);
-                }
-
-                f2c::types::Cells cells_to_erode;
-                if (cells_to_merge.size() > 1) {
-                    const double merge_angle = req.use_sweep_decomp
-                        ? 60.0 : req.merge_angle_threshold;
-                    // 共享边 ≥ coverage_width*0.5 才合并，避免碎片
-                    const double min_shared = req.coverage_width * 0.50;
-                    auto merge_result = mergeCellsWithSimilarDirection(
-                        cells_to_merge, req.polygon, req.coverage_width,
-                        merge_angle, min_shared);
-                    cells_to_erode = std::move(merge_result.cells);
-                } else {
-                    cells_to_erode = cells_to_merge;
-                }
-
-                // 逐 cell 自适应 no_hl 侵蚀
+                // 逐 cell 自适应 no_hl
                 double cell_no_hl_ratio = effective_no_hl_ratio;
                 {
                     double cell_perimeter = work_cell.getExteriorRing().length();
@@ -267,14 +245,14 @@ PlanningComponentResult planSingleComponent(
 
                 double no_hl_w = cell_no_hl_ratio * req.robot_width;
                 if (no_hl_w > 1e-6) {
-                    for (size_t di = 0; di < cells_to_erode.size(); ++di) {
+                    for (size_t di = 0; di < decomposed.size(); ++di) {
                         f2c::types::Cells single;
-                        single.addGeometry(cells_to_erode.getGeometry(di));
+                        single.addGeometry(decomposed.getGeometry(di));
                         auto eroded = hl_gen.generateHeadlands(single, no_hl_w);
                         for (size_t ei = 0; ei < eroded.size(); ++ei) no_hl.addGeometry(eroded.getGeometry(ei));
                     }
                 } else {
-                    for (size_t di = 0; di < cells_to_erode.size(); ++di) no_hl.addGeometry(cells_to_erode.getGeometry(di));
+                    for (size_t di = 0; di < decomposed.size(); ++di) no_hl.addGeometry(decomposed.getGeometry(di));
                 }
             }
         } else {
@@ -285,6 +263,34 @@ PlanningComponentResult planSingleComponent(
 
         if (no_hl.size() == 0) {
             result.error_message = "Decomposition produced zero cells";
+            return result;
+        }
+
+        // 第一轮合并：v9.11 原版（质心连线孔洞保护）
+        if (no_hl.size() > 1) {
+            const double merge_angle_threshold = req.use_sweep_decomp
+                ? 60.0 : req.merge_angle_threshold;
+            no_hl = mergeCellsWithSimilarDirection(
+                no_hl, req.polygon, req.coverage_width,
+                merge_angle_threshold, true).cells;
+        }
+
+        // 第二轮合并：孔洞同侧的漏网 cell（不用质心连线，靠 interior ring 把关）
+        if (no_hl.size() > 1) {
+            const double merge_angle_threshold = req.use_sweep_decomp
+                ? 60.0 : req.merge_angle_threshold;
+            no_hl = mergeCellsWithSimilarDirection(
+                no_hl, req.polygon, req.coverage_width,
+                merge_angle_threshold, false).cells;
+        }
+
+        if (req.filter_tiny_cells) {
+            const double min_cell_area =
+                req.min_cell_area_ratio * req.coverage_width * req.robot_width;
+            no_hl = filterTinyCells(no_hl, min_cell_area);
+        }
+        if (no_hl.size() == 0) {
+            result.error_message = "Cell filtering produced zero cells";
             return result;
         }
 
