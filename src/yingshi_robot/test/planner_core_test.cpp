@@ -104,6 +104,9 @@ TEST(PlannerCore, UsesValidatedV97PhysicalDefaults)
     EXPECT_TRUE(request.filter_tiny_cells);
     EXPECT_TRUE(request.path_simplify_enabled);
     EXPECT_FALSE(request.traversability_enabled);
+    EXPECT_FALSE(request.physical_collision_check_enabled);
+    EXPECT_DOUBLE_EQ(request.physical_footprint.body_width, 0.80);
+    EXPECT_DOUBLE_EQ(request.physical_footprint.cleaner_diameter, 0.45);
     EXPECT_DOUBLE_EQ(request.cspace_clearance_margin, 0.0);
     EXPECT_DOUBLE_EQ(request.max_excluded_area_ratio, 0.05);
 }

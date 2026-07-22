@@ -14,6 +14,7 @@
 #include <memory>
 #include <fields2cover.h>
 
+#include "yingshi_robot/physical_footprint.hpp"
 #include "yingshi_robot/traversability.hpp"
 
 namespace yingshi {
@@ -70,6 +71,12 @@ struct PlanningRequest {
     bool traversability_enabled = false;
     double cspace_clearance_margin = 0.0;
     double max_excluded_area_ratio = 0.05;
+
+    // ── 独立实体碰撞检查 ──
+    // Collision-only physical gate, separate from robot_width semantics.
+    // 默认关闭以保持纯 C++ 历史基线；ROS 节点构造请求时显式开启。
+    bool physical_collision_check_enabled = false;
+    PhysicalFootprintParams physical_footprint;
 };
 
 // 单个中心可达分量的独立规划结果。分量之间没有隐式连线；
@@ -94,6 +101,7 @@ struct PlanningComponentResult {
     size_t out_of_planning_area_segments = 0;
     bool path_has_crossings = false;
     bool path_leaves_planning_area = false;
+    FootprintCollisionResult physical_collision;
     bool success = false;
     std::string error_message;
 };
@@ -118,6 +126,7 @@ struct PlanningResult {
     size_t out_of_planning_area_segments = 0;
     bool path_has_crossings = false;
     bool path_leaves_planning_area = false;
+    FootprintCollisionResult physical_collision;
 
     // ── C-space 诊断与分量结果 ──
     TraversabilityResult traversability;

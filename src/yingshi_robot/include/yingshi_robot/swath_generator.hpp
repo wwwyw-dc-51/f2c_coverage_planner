@@ -70,6 +70,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
     bool swath_angle_optimization,
     const std::vector<double>& swath_angle_candidates,
     double boundary_fill_offset = -1.0,
-    bool use_sweep_decomp = false);
+    bool use_sweep_decomp = false,
+    double robot_half_width = 0.0);
 
 }  // namespace yingshi

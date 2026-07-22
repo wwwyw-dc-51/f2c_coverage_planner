@@ -333,14 +333,20 @@ void fillBoundaryGaps(
     if (cell_ring.size() < 3) return;
     const auto& poly_ring = full_polygon.getExteriorRing();
 
-    // 此偏移只保证覆盖工具贴边；机器人外形净空需要单独校验。
     const double boundary_offset = boundary_offset_override >= 0.0
         ? boundary_offset_override
-        : cov_width * 0.5;
-    (void)robot_half_width;  // 保留接口兼容性，当前不参与边界补线偏移。
+        : std::max(cov_width * 0.5, robot_half_width);
+    /*
+
+    // 原始几何下，边界补线至少要为实体外形保留横向净空。
+    const double boundary_offset = boundary_offset_override >= 0.0
+        ? boundary_offset_override
+        : std::max(cov_width * 0.5, robot_half_width);
     (void)shrink_dist;  // 端点缩进由 adjustSwathEndpoints 单独处理
 
     // ── cell bbox ──
+    */
+    (void)shrink_dist;
     double c_min_x = 1e9, c_max_x = -1e9, c_min_y = 1e9, c_max_y = -1e9;
     for (size_t ci = 0; ci + 1 < cell_ring.size(); ++ci) {
         double cx = cell_ring.getGeometry(ci).getX();

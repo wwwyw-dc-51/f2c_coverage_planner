@@ -5,6 +5,7 @@
 
 #include "yingshi_robot/planner_core.hpp"
 #include "yingshi_robot/decomposer.hpp"
+#include "yingshi_robot/geometry_normalizer.hpp"
 #include "yingshi_robot/swath_generator.hpp"
 #include "yingshi_robot/boundary_filler.hpp"
 #include "yingshi_robot/path_planner.hpp"
@@ -13,6 +14,7 @@
 #include <fields2cover/path_planning/dubins_curves.h>
 #include <fields2cover/path_planning/dubins_curves_cc.h>
 #include <fields2cover/path_planning/reeds_shepp_curves.h>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <utility>
@@ -73,6 +75,37 @@ f2c::types::Robot makeRobot(const PlanningRequest& req)
     return robot;
 }
 
+double physicalHalfWidth(const PhysicalFootprintParams& params)
+{
+    return std::max(
+        0.5 * params.body_width,
+        std::abs(params.cleaner_center_lateral) +
+            0.5 * params.cleaner_diameter) + params.safety_margin;
+    /*
+    // 清洁轮外缘决定横向最大占用宽度；车身宽度仍只用于碰撞检查。
+    return std::max(
+        0.5 * params.body_width,
+        std::abs(params.cleaner_center_lateral) +
+            0.5 * params.cleaner_diameter) + params.safety_margin;
+    */
+}
+
+double holeRepairClearance(
+    const PlanningRequest& req,
+    bool cspace_constrained)
+{
+    if (cspace_constrained) return 1e-4;
+
+    const double coverage_half_width = 0.5 * req.coverage_width;
+    if (!req.physical_collision_check_enabled) {
+        return coverage_half_width;
+    }
+
+    return std::max(
+        coverage_half_width,
+        physicalFootprintClearanceRadius(req.physical_footprint));
+}
+
 // ── Snake 模式直连路由 ──
 f2c::types::Route buildSnakeRoute(
     const f2c::types::SwathsByCells& swaths_by_cells,
@@ -130,11 +163,14 @@ f2c::types::Route buildSnakeRoute(
 namespace {
 
 PlanningComponentResult planSingleComponent(
-    const PlanningRequest& req,
+    PlanningRequest req,
     std::size_t component_index,
     const f2c::types::Cells& coverage_target,
     bool cspace_constrained)
 {
+    req.polygon = normalizeCell(req.polygon);
+    req.holes = normalizeRings(req.holes);
+
     PlanningComponentResult result;
     result.component_index = component_index;
     result.planning_polygon = req.polygon;
@@ -228,6 +264,7 @@ PlanningComponentResult planSingleComponent(
                 } else {
                     decomposed = rectilinearDecompose(work_cell, grid_cell, dparams);
                 }
+                decomposed = normalizeCells(decomposed);
 
                 // 逐 cell 自适应 no_hl
                 double cell_no_hl_ratio = effective_no_hl_ratio;
@@ -261,6 +298,8 @@ PlanningComponentResult planSingleComponent(
             else { no_hl.addGeometry(req.polygon); }
         }
 
+        no_hl = normalizeCells(no_hl);
+
         if (no_hl.size() == 0) {
             result.error_message = "Decomposition produced zero cells";
             return result;
@@ -273,11 +312,13 @@ PlanningComponentResult planSingleComponent(
             no_hl = mergeCellsWithSimilarDirection(
                 no_hl, req.polygon, req.coverage_width,
                 merge_angle_threshold, req.use_sweep_decomp).cells;
+            no_hl = normalizeCells(no_hl);
         }
 
         // 第二轮：合并被孔洞顶点误切的同 x-span 矩形条带（interior ring 把关）
         if (req.use_sweep_decomp && no_hl.size() > 1) {
             no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
+            no_hl = normalizeCells(no_hl);
         }
 
         // 方案 1：保守垂直兜底合并
@@ -285,6 +326,7 @@ PlanningComponentResult planSingleComponent(
         // 再跑一次垂直合并作为安全收尾
         if (req.use_sweep_decomp && no_hl.size() > 1) {
             no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
+            no_hl = normalizeCells(no_hl);
         }
 
         if (req.filter_tiny_cells) {
@@ -298,13 +340,18 @@ PlanningComponentResult planSingleComponent(
         }
 
         // ── 3. 生成 swaths（全局角度优化 + 边界填补）──
+        const double physical_half_width =
+            !cspace_constrained && req.physical_collision_check_enabled
+            ? physicalHalfWidth(req.physical_footprint)
+            : 0.0;
         f2c::types::SwathsByCells swaths_by_cells =
             generateSwathsForAllCells(
                 no_hl, req.polygon, r_w, req.coverage_width,
                 req.swath_endpoint_shrink_distance, req.min_swath_length,
                 req.swath_angle_optimization, req.swath_angle_candidates,
                 cspace_constrained ? 1e-4 : -1.0,
-                req.use_sweep_decomp);
+                req.use_sweep_decomp,
+                physical_half_width);
 
         if (swaths_by_cells.sizeTotal() == 0) {
             result.error_message = "No swaths generated";
@@ -340,9 +387,8 @@ PlanningComponentResult planSingleComponent(
 
         // ── 8. 孔洞感知修复（genRoute 后立即修）──
         if (!req.holes.empty()) {
-            const double connection_clearance = cspace_constrained
-                ? 1e-4
-                : req.coverage_width * 0.5;
+            const double connection_clearance = holeRepairClearance(
+                req, cspace_constrained);
             repairRouteConnectionsAroundHoles(
                 route, req.holes, connection_clearance);
             synchronizeRouteConnectionEndpoints(
@@ -371,7 +417,26 @@ PlanningComponentResult planSingleComponent(
         // ── 9.5. 边界调整后最终孔洞修复 ──
         if (!req.holes.empty()) {
             repairRouteConnectionsAroundHoles(
-                route, req.holes, 0.001);
+                route, req.holes,
+                holeRepairClearance(req, cspace_constrained));
+        }
+
+        if (req.physical_collision_check_enabled && !cspace_constrained) {
+            const auto endpoint_repairs =
+                repairRouteSwathEndpointsForCollision(
+                    route, req.polygon, req.holes,
+                    req.physical_footprint);
+            if (endpoint_repairs > 0) {
+                synchronizeRouteConnectionEndpoints(
+                    route,
+                    2.0 * physicalFootprintClearanceRadius(
+                        req.physical_footprint));
+                if (!req.holes.empty()) {
+                    repairRouteConnectionsAroundHoles(
+                        route, req.holes,
+                        holeRepairClearance(req, cspace_constrained));
+                }
+            }
         }
 
         // ── 9. 路径规划 ──
@@ -420,12 +485,20 @@ PlanningComponentResult planSingleComponent(
             result.path_leaves_planning_area =
                 result.out_of_planning_area_segments > 0;
         }
+        if (req.physical_collision_check_enabled && !cspace_constrained) {
+            result.physical_collision = checkPathFootprintCollision(
+                path, req.polygon, req.holes, req.physical_footprint);
+        }
         if (result.path_has_crossings) {
             result.error_message =
                 "Planned path crosses obstacle holes";
         } else if (result.path_leaves_planning_area) {
             result.error_message =
                 "Planned path leaves the C-space planning area";
+        } else if (result.physical_collision.collision) {
+            result.error_message =
+                "Physical footprint collision: " +
+                result.physical_collision.message;
         }
 
         // ── 12. 组装结果 ──
@@ -436,7 +509,8 @@ PlanningComponentResult planSingleComponent(
         result.total_swaths = swaths_by_cells.sizeTotal();
         result.total_connections = route.sizeConnections();
         result.success = !result.path_has_crossings &&
-            !result.path_leaves_planning_area;
+            !result.path_leaves_planning_area &&
+            !result.physical_collision.collision;
 
     } catch (const std::exception& e) {
         result.success = false;
@@ -483,6 +557,7 @@ void exposeSingleComponent(
     result.path_has_crossings = component.path_has_crossings;
     result.path_leaves_planning_area =
         component.path_leaves_planning_area;
+    result.physical_collision = component.physical_collision;
 }
 
 }  // namespace
@@ -555,6 +630,9 @@ PlanningResult PlannerCore::plan(const PlanningRequest& req)
                 result.path_leaves_planning_area =
                     result.path_leaves_planning_area ||
                     component.path_leaves_planning_area;
+                if (component.physical_collision.collision) {
+                    result.physical_collision = component.physical_collision;
+                }
                 if (!component.success) {
                     result.error_message =
                         "C-space component " + std::to_string(i) +

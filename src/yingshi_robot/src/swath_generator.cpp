@@ -286,7 +286,8 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
     bool swath_angle_optimization,
     const std::vector<double>& swath_angle_candidates,
     double boundary_fill_offset,
-    bool use_sweep_decomp)
+    bool use_sweep_decomp,
+    double robot_half_width)
 {
     f2c::sg::BruteForce swath_gen;
     swath_gen.setAllowOverlap(true);
@@ -343,7 +344,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                 fillBoundaryGaps(
                     cs, no_hl.getGeometry(ci), full_polygon,
                     best_ang, coverage_width,
-                    swath_endpoint_shrink_distance, 0.0,
+                    swath_endpoint_shrink_distance, robot_half_width,
                     boundary_fill_offset);
                 swaths_by_cells.push_back(cs);
             }
@@ -392,7 +393,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
                         auto cs = local_swaths;
                         fillBoundaryGaps(cs, cell, full_polygon,
                             local_ang, coverage_width,
-                            swath_endpoint_shrink_distance, 0.0,
+                            swath_endpoint_shrink_distance, robot_half_width,
                             boundary_fill_offset);
                         size_t rm = 0;
                         cs = filterShortSwaths(cs, min_swath_length, rm);
@@ -431,7 +432,7 @@ f2c::types::SwathsByCells generateSwathsForAllCells(
             cs = filterShortSwaths(cs, min_swath_length, rm);
             fillBoundaryGaps(
                 cs, sub, full_polygon, ang, coverage_width,
-                swath_endpoint_shrink_distance, 0.0,
+                swath_endpoint_shrink_distance, robot_half_width,
                 boundary_fill_offset);
             if (cs.size() == 0) {
                 return f2c::types::SwathsByCells();

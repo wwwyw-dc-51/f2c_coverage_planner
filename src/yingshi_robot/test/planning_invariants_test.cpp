@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "yingshi_robot/boundary_filler.hpp"
+#include "yingshi_robot/geometry_normalizer.hpp"
 #include "yingshi_robot/path_geometry.hpp"
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/path_sanity_check.hpp"
@@ -452,6 +453,61 @@ TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
         << "Right boundary fill should use coverage_width (center at 1.55)";
     EXPECT_FALSE(found_right_at_old_wrong_offset)
         << "Old row-spacing offset (1.5635) must not appear";
+}
+
+double ringSignedArea(const f2c::types::LinearRing& ring)
+{
+    double area = 0.0;
+    for (size_t i = 0; i + 1 < ring.size(); ++i) {
+        const auto& current = ring.getGeometry(i);
+        const auto& next = ring.getGeometry(i + 1);
+        area += current.getX() * next.getY() -
+            next.getX() * current.getY();
+    }
+    return 0.5 * area;
+}
+
+TEST(GeometryNormalization, SnapsDeduplicatesAndOrientsRings)
+{
+    f2c::types::Cell raw;
+    raw.addRing(yingshi::makeClosedRing({
+        f2c::types::Point(0.0, 0.0),
+        f2c::types::Point(0.0, 5.00000004),
+        f2c::types::Point(5.0, 5.0),
+        f2c::types::Point(5.0, 0.0),
+        f2c::types::Point(0.0, 0.0),
+    }));
+    raw.addRing(yingshi::makeClosedRing({
+        f2c::types::Point(1.0, 1.0),
+        f2c::types::Point(3.0, 1.0),
+        f2c::types::Point(3.0, 3.0),
+        f2c::types::Point(1.0, 3.0),
+        f2c::types::Point(1.0, 1.0),
+    }));
+
+    const auto normalized = yingshi::normalizeCell(raw);
+
+    ASSERT_EQ(normalized.size(), 2U);
+    EXPECT_EQ(normalized.getExteriorRing().size(), 5U);
+    EXPECT_EQ(normalized.getInteriorRing(0).size(), 5U);
+    EXPECT_DOUBLE_EQ(
+        normalized.getExteriorRing().getGeometry(1).getY(), 5.0);
+    EXPECT_GT(ringSignedArea(normalized.getExteriorRing()), 0.0);
+    EXPECT_LT(ringSignedArea(normalized.getInteriorRing(0)), 0.0);
+}
+
+TEST(BoundaryFill, UsesPhysicalHalfWidthWhenProvided)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto top_cell = makeRectangle(0.0, 8.1, 10.0, 10.0);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.15, 8.5, 9.85, 8.5, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, top_cell, full_polygon, 0.0, 0.90, 0.0, 0.48);
+
+    ASSERT_EQ(swaths.size(), 2U);
+    EXPECT_NEAR(swathMidY(swaths.at(1)), 9.52, 1e-9);
 }
 
 TEST(SwathGeneration, FailsClosedWhenAnyRetainedCellHasNoValidSwath)

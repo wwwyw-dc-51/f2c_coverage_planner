@@ -45,7 +45,9 @@ add_library(coverage_planner_core STATIC
   src/decomposer.cpp
   src/swath_generator.cpp
   src/boundary_filler.cpp
+  src/geometry_normalizer.cpp
   src/path_planner.cpp
+  src/physical_footprint.cpp
   src/traversability.cpp
   src/planner_core.cpp
 )
@@ -166,6 +168,13 @@ if(BUILD_TESTING)
     test/traversability_test.cpp
   )
   target_link_libraries(traversability_test
+    coverage_planner_core
+  )
+
+  ament_add_gtest(physical_footprint_test
+    test/physical_footprint_test.cpp
+  )
+  target_link_libraries(physical_footprint_test
     coverage_planner_core
   )
 

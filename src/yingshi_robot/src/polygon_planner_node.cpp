@@ -1930,6 +1930,10 @@ private:
         req.traversability_enabled = traversability_enabled_;
         req.cspace_clearance_margin = cspace_clearance_margin_;
         req.max_excluded_area_ratio = max_excluded_area_ratio_;
+        req.physical_collision_check_enabled = true;
+
+        // 实体碰撞检查独立于 robot_width，不参与 headland/Sweep 拓扑。
+        req.physical_collision_check_enabled = true;
 
         return req;
     }
@@ -1973,6 +1977,13 @@ private:
         }
 
         if (!result.success) {
+            if (result.physical_collision.collision) {
+                RCLCPP_ERROR(this->get_logger(),
+                    "Physical footprint gate: %s (checked_poses=%zu, state=%zu)",
+                    result.physical_collision.message.c_str(),
+                    result.physical_collision.checked_poses,
+                    result.physical_collision.collision_state_index);
+            }
             RCLCPP_ERROR(this->get_logger(),
                 "PlannerCore plan() failed: %s", result.error_message.c_str());
             clearPlanningCacheForPolygon(index, true);
