@@ -17,6 +17,57 @@ namespace yingshi {
 // ========== 主分解函数 ==========
 // Sweep 扫描线分解：以孔洞顶点 y 坐标做水平切分线，生成全宽条带 Cells
 // 相比 Boustrophedon 网格分解，cell 数大幅减少（S3: 42→7）
+
+namespace {
+
+// 判定孔洞是否为轴对齐矩形（4顶点 + 边水平/垂直 + 面积≈bbox）
+// 用于方案 2 混合分解：矩形孔洞走子矩形拆分，非矩形孔洞回退 difference
+bool isAxisAlignedRectHole(const f2c::types::LinearRing& ring)
+{
+    const size_t n = ring.size();
+    if (n < 5) return false;  // 至少需要 4 顶点 + 闭合点
+    const size_t n_unique = (ring.getGeometry(0).distance(ring.getGeometry(n-1)) < 1e-9)
+        ? n - 1 : n;
+    if (n_unique != 4) return false;
+
+    // 收集 X/Y 坐标，检查是否为矩形
+    std::vector<double> xs, ys;
+    for (size_t i = 0; i < n_unique; ++i) {
+        xs.push_back(ring.getGeometry(i).getX());
+        ys.push_back(ring.getGeometry(i).getY());
+    }
+    std::sort(xs.begin(), xs.end());
+    std::sort(ys.begin(), ys.end());
+    auto dedup = [](std::vector<double>& v) {
+        v.erase(std::unique(v.begin(), v.end(),
+            [](double a, double b) { return std::abs(a-b) < 1e-6; }), v.end());
+    };
+    dedup(xs);
+    dedup(ys);
+    if (xs.size() != 2 || ys.size() != 2) return false;
+
+    // 面积检查：bbox 面积 ≈ ring 面积（非矩形孔洞会明显偏小）
+    const double bbox_area = (xs[1] - xs[0]) * (ys[1] - ys[0]);
+    if (bbox_area <= 1e-9) return false;
+    // 用 ring 上的点构造 Cell 算面积（比直接从顶点估算更准确）
+    f2c::types::Cell tmp;
+    tmp.addRing(ring);
+    const double actual = std::abs(tmp.area());
+    return actual >= bbox_area * 0.99;  // 1% 容差，矩形孔洞面积 ≈ bbox
+}
+
+// 判定 cell 内所有孔洞是否都是轴对齐矩形
+bool allHolesAreAxisAlignedRects(const f2c::types::Cell& cell)
+{
+    for (size_t hi = 0; hi + 1 < cell.size(); ++hi) {
+        if (!isAxisAlignedRectHole(cell.getInteriorRing(hi)))
+            return false;
+    }
+    return cell.size() > 1;  // 至少有一个孔洞才返回 true
+}
+
+}  // namespace
+
 f2c::types::Cells rectilinearDecompose(
     const f2c::types::Cell& work_area,
     const f2c::types::Cell& grid_src,
@@ -107,6 +158,22 @@ f2c::types::Cells rectilinearDecompose(
             for (size_t ci = 0; ci < intersected.size(); ++ci) {
                 f2c::types::Cell cell = intersected.getGeometry(ci);
                 if (cell.size() > 1) {
+                    // 混合分解：矩形孔洞走方案 2 子矩形拆分，非矩形孔洞回退旧 difference
+                    if (!allHolesAreAxisAlignedRects(cell)) {
+                        // 非矩形孔洞回退：直接 difference 整个条带
+                        f2c::types::Cells fallback;
+                        fallback.addGeometry(cell);
+                        for (size_t fhi = 0; fhi + 1 < cell.size(); ++fhi) {
+                            f2c::types::Cell fh;
+                            fh.addRing(cell.getInteriorRing(fhi));
+                            f2c::types::Cells fhc;
+                            fhc.addGeometry(fh);
+                            fhc = fhc.buffer(0.001);
+                            fallback = fallback.difference(fhc);
+                        }
+                        for (size_t fi = 0; fi < fallback.size(); ++fi)
+                            result.addGeometry(fallback.getGeometry(fi));
+                    } else {
                     // 方案 2：有洞条带沿孔洞 X 边界拆成子矩形，避免 difference 碎片化
                     // 收集该 cell 内所有孔洞的 X 边界
                     std::vector<double> hole_x_bounds;
@@ -167,6 +234,7 @@ f2c::types::Cells rectilinearDecompose(
                             }
                         }
                     }
+                    }  // end 方案 2 else
                 } else {
                     result.addGeometry(cell);
                 }
