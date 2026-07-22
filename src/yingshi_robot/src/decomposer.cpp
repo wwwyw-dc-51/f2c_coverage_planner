@@ -73,19 +73,41 @@ f2c::types::Cells rectilinearDecompose(
                 if (hx_min < hx_max && hy_min < hy_max)
                     hole_bboxes.push_back({hx_min, hx_max, hy_min, hy_max});
             }
-            bool has_dense_columns = false;
-            for (size_t i = 0; i < hole_bboxes.size() && !has_dense_columns; ++i) {
-                for (size_t j = i + 1; j < hole_bboxes.size(); ++j) {
-                    bool y_overlap = hole_bboxes[i].ymax > hole_bboxes[j].ymin &&
-                                     hole_bboxes[j].ymax > hole_bboxes[i].ymin;
-                    bool x_separated = hole_bboxes[i].xmax < hole_bboxes[j].xmin ||
-                                       hole_bboxes[j].xmax < hole_bboxes[i].xmin;
-                    if (y_overlap && x_separated) {
-                        has_dense_columns = true;
-                        break;
+            // 按 Y 范围聚类孔洞，计数每行的列数
+            // 条件：≥2 行 × ≥2 列，或单行 ≥3 列 → 密集货架网格
+            std::vector<bool> visited(hole_bboxes.size(), false);
+            int multi_col_rows = 0;
+            int max_cols_in_row = 0;
+            for (size_t i = 0; i < hole_bboxes.size(); ++i) {
+                if (visited[i]) continue;
+                double row_ymin = hole_bboxes[i].ymin;
+                double row_ymax = hole_bboxes[i].ymax;
+                std::vector<size_t> row_holes;
+                for (size_t j = i; j < hole_bboxes.size(); ++j) {
+                    if (visited[j]) continue;
+                    if (hole_bboxes[j].ymax > row_ymin &&
+                        row_ymax > hole_bboxes[j].ymin) {
+                        row_holes.push_back(j);
+                        visited[j] = true;
+                        row_ymin = std::min(row_ymin, hole_bboxes[j].ymin);
+                        row_ymax = std::max(row_ymax, hole_bboxes[j].ymax);
                     }
                 }
+                int cols = 0;
+                for (size_t a = 0; a < row_holes.size(); ++a) {
+                    bool is_new_col = true;
+                    for (size_t b = 0; b < a && is_new_col; ++b) {
+                        size_t ia = row_holes[a], ib = row_holes[b];
+                        if (!(hole_bboxes[ia].xmax < hole_bboxes[ib].xmin ||
+                              hole_bboxes[ib].xmax < hole_bboxes[ia].xmin))
+                            is_new_col = false;
+                    }
+                    if (is_new_col) ++cols;
+                }
+                max_cols_in_row = std::max(max_cols_in_row, cols);
+                if (cols >= 2) ++multi_col_rows;
             }
+            bool has_dense_columns = (multi_col_rows >= 2) || (max_cols_in_row >= 3);
             if (has_dense_columns) {
                 for (const auto& hb : hole_bboxes) {
                     xs.push_back(hb.xmin);
