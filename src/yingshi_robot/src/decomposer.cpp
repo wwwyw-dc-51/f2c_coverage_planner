@@ -450,14 +450,23 @@ CellMergeResult mergeCellsWithSimilarDirection(
             f2c::types::Cells temporary(merged_cell);
             auto union_result = temporary.unionOp(cells.getGeometry(i));
             if (union_result.size() == 0) {
-            if (union_result.getGeometry(0).size() > 1) {
-                merged_cells.addGeometry(cells.getGeometry(i));
-                continue;
-            }
                 // 拓扑运算失败时保留当前单元，不能静默缩小作业区。
                 merged_cells.addGeometry(cells.getGeometry(i));
                 continue;
             }
+
+            // 检查合并后是否产生 interior ring（孔洞被包入 cell 内部）
+            // 若产生孔洞则拒绝本次合并，保留原始 cell（与 mergeAdjacentSweepStrips 一致）
+            bool has_interior = false;
+            for (size_t ri = 0; ri < union_result.size() && !has_interior; ++ri) {
+                if (union_result.getGeometry(ri).size() > 1)
+                    has_interior = true;
+            }
+            if (has_interior) {
+                merged_cells.addGeometry(cells.getGeometry(i));
+                continue;
+            }
+
             ++successful_merges;
             merged_cell = union_result.getGeometry(0);
             // 保持 legacy 的 MultiPolygon 顺序：首块继续参与后续合并，
