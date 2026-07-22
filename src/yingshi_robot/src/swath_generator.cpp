@@ -14,6 +14,76 @@
 
 namespace yingshi {
 
+namespace {
+
+std::vector<double> findSwathHoleIntersections(
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    const std::vector<f2c::types::LinearRing>& hole_rings)
+{
+    constexpr double kTolerance = 1e-8;
+    std::vector<double> parameters;
+    const double sx = start.getX();
+    const double sy = start.getY();
+    const double dx = end.getX() - sx;
+    const double dy = end.getY() - sy;
+    if (std::hypot(dx, dy) <= kTolerance) return parameters;
+
+    for (const auto& ring : hole_rings) {
+        for (size_t edge = 0; edge + 1 < ring.size(); ++edge) {
+            const double ax = ring.getGeometry(edge).getX();
+            const double ay = ring.getGeometry(edge).getY();
+            const double bx = ring.getGeometry(edge + 1).getX();
+            const double by = ring.getGeometry(edge + 1).getY();
+            const double edge_dx = bx - ax;
+            const double edge_dy = by - ay;
+            const double denominator = dx * edge_dy - dy * edge_dx;
+            if (std::abs(denominator) <= kTolerance) continue;
+
+            const double t = ((ax - sx) * edge_dy -
+                              (ay - sy) * edge_dx) / denominator;
+            const double u = ((ax - sx) * dy -
+                              (ay - sy) * dx) / denominator;
+            if (t > kTolerance && t < 1.0 - kTolerance &&
+                u >= -kTolerance && u <= 1.0 + kTolerance) {
+                parameters.push_back(t);
+            }
+        }
+    }
+
+    std::sort(parameters.begin(), parameters.end());
+    parameters.erase(
+        std::unique(
+            parameters.begin(), parameters.end(),
+            [kTolerance](double lhs, double rhs) {
+                return std::abs(lhs - rhs) <= kTolerance;
+            }),
+        parameters.end());
+    return parameters;
+}
+
+f2c::types::Swath makeSwathSegment(
+    const f2c::types::Swath& source,
+    double start_t,
+    double end_t)
+{
+    const auto start = source.startPoint();
+    const auto end = source.endPoint();
+    const double x0 = start.getX() + start_t * (end.getX() - start.getX());
+    const double y0 = start.getY() + start_t * (end.getY() - start.getY());
+    const double x1 = start.getX() + end_t * (end.getX() - start.getX());
+    const double y1 = start.getY() + end_t * (end.getY() - start.getY());
+
+    auto result = source.clone();
+    f2c::types::LineString path;
+    path.addPoint(f2c::types::Point(x0, y0));
+    path.addPoint(f2c::types::Point(x1, y1));
+    result.setPath(path);
+    return result;
+}
+
+}  // namespace
+
 // ========== Swath 长度计算 ==========
 double swathLength(const f2c::types::Swath& swath)
 {
@@ -116,6 +186,100 @@ f2c::types::SwathsByCells adjustSwathsEndpoints(
     }
 
     return adjusted_swaths_by_cells;
+}
+
+size_t clipSwathsCrossingHoles(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double min_swath_length)
+{
+    if (hole_rings.empty()) return 0;
+
+    const double minimum_piece_length =
+        std::max(0.0, min_swath_length) * 0.5;
+    size_t clipped_count = 0;
+    f2c::types::SwathsByCells clipped_by_cells;
+    for (size_t cell_index = 0;
+         cell_index < swaths_by_cells.size(); ++cell_index) {
+        const auto source_swaths = swaths_by_cells.at(cell_index);
+        std::vector<f2c::types::Swaths> cell_groups;
+        bool cell_was_split = false;
+        for (size_t swath_index = 0;
+             swath_index < source_swaths.size(); ++swath_index) {
+            const auto& source = source_swaths.at(swath_index);
+            const auto start = source.startPoint();
+            const auto end = source.endPoint();
+            if (!segmentCrossesHole(
+                    start.getX(), start.getY(), end.getX(), end.getY(),
+                    hole_rings, 50)) {
+                f2c::types::Swaths group;
+                group.push_back(source);
+                cell_groups.push_back(group);
+                continue;
+            }
+
+            const auto intersections =
+                findSwathHoleIntersections(start, end, hole_rings);
+            if (intersections.size() < 2) {
+                // 交叉检测与精确求交不一致时保留原 swath，交给后续安全门拒绝。
+                f2c::types::Swaths group;
+                group.push_back(source);
+                cell_groups.push_back(group);
+                continue;
+            }
+
+            f2c::types::Swaths split_groups;
+            double previous_t = 0.0;
+            for (const double intersection_t : intersections) {
+                const double midpoint =
+                    0.5 * (previous_t + intersection_t);
+                const double mx = start.getX() +
+                    midpoint * (end.getX() - start.getX());
+                const double my = start.getY() +
+                    midpoint * (end.getY() - start.getY());
+                if (!pointInAnyHole(mx, my, hole_rings)) {
+                    const auto piece = makeSwathSegment(
+                        source, previous_t, intersection_t);
+                    if (swathLength(piece) >= minimum_piece_length) {
+                        split_groups.push_back(piece);
+                    }
+                }
+                previous_t = intersection_t;
+            }
+
+            if (previous_t < 1.0) {
+                const double midpoint = 0.5 * (previous_t + 1.0);
+                const double mx = start.getX() +
+                    midpoint * (end.getX() - start.getX());
+                const double my = start.getY() +
+                    midpoint * (end.getY() - start.getY());
+                if (!pointInAnyHole(mx, my, hole_rings)) {
+                    const auto piece = makeSwathSegment(
+                        source, previous_t, 1.0);
+                    if (swathLength(piece) >= minimum_piece_length) {
+                        split_groups.push_back(piece);
+                    }
+                }
+            }
+            for (const auto& piece : split_groups) {
+                f2c::types::Swaths group;
+                group.push_back(piece);
+                cell_groups.push_back(group);
+            }
+            cell_was_split = true;
+            ++clipped_count;
+        }
+        if (!cell_was_split) {
+            clipped_by_cells.push_back(source_swaths);
+        } else {
+            // 裁剪出的两段不能留在同一个组内，否则组内直连会重新穿过孔洞。
+            for (const auto& group : cell_groups) {
+                clipped_by_cells.push_back(group);
+            }
+        }
+    }
+    swaths_by_cells = clipped_by_cells;
+    return clipped_count;
 }
 
 // ========== 计算多边形主方向 ==========

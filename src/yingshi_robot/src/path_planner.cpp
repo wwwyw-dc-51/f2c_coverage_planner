@@ -104,11 +104,12 @@ std::vector<HoleIntersection> findHoleIntersections(
                 denominator;
             const double u = ((ax - sx) * dy - (ay - sy) * dx) /
                 denominator;
-            if (t > 1e-8 && t < 1.0 - 1e-8 &&
+            if (t >= -1e-8 && t <= 1.0 + 1e-8 &&
                 u >= -1e-8 && u <= 1.0 + 1e-8) {
+                const double clamped_t = std::max(0.0, std::min(1.0, t));
                 intersections.push_back({
-                    t, hole_idx, edge_idx,
-                    sx + t * dx, sy + t * dy});
+                    clamped_t, hole_idx, edge_idx,
+                    sx + clamped_t * dx, sy + clamped_t * dy});
             }
         }
     }
@@ -187,16 +188,48 @@ std::vector<f2c::types::LinearRing> makeAvoidanceRings(
 {
     f2c::types::Cells avoidance_cells;
     for (const auto& ring : hole_rings) {
-        const f2c::types::Cell hole_cell(ring);
-        const auto avoidance_cell = clearance > 1e-9 ?
-            f2c::types::Cell::buffer(hole_cell, clearance) : hole_cell;
-        if (avoidance_cell.getExteriorRing().size() >= 4) {
-            avoidance_cells.addGeometry(avoidance_cell);
+        try {
+            const f2c::types::Cell hole_cell(ring);
+            const auto avoidance_cell = clearance > 1e-9 ?
+                f2c::types::Cell::buffer(hole_cell, clearance) : hole_cell;
+            if (avoidance_cell.getExteriorRing().size() >= 4) {
+                avoidance_cells.addGeometry(avoidance_cell);
+            }
+        } catch (...) {
+            // 单孔洞 buffer 失败时保留原孔洞，避免整条连接修复链中断。
+            try {
+                const f2c::types::Cell hole_cell(ring);
+                if (hole_cell.getExteriorRing().size() >= 4) {
+                    avoidance_cells.addGeometry(hole_cell);
+                }
+            } catch (...) {
+                // 无效孔洞交给后续路径碰撞门处理。
+            }
         }
     }
     if (avoidance_cells.size() == 0) return hole_rings;
 
-    const auto merged_cells = avoidance_cells.unionCascaded();
+    f2c::types::Cells merged_cells;
+    try {
+        merged_cells = avoidance_cells.unionCascaded();
+    } catch (...) {
+        std::vector<f2c::types::LinearRing> fallback_rings;
+        fallback_rings.reserve(avoidance_cells.size());
+        for (size_t cell_idx = 0;
+             cell_idx < avoidance_cells.size(); ++cell_idx) {
+            const auto exterior =
+                avoidance_cells.getGeometry(cell_idx).getExteriorRing();
+            if (exterior.size() >= 4) {
+                fallback_rings.push_back(exterior);
+            }
+        }
+        return fallback_rings.empty() ? hole_rings : fallback_rings;
+        /*
+        // 障碍缓冲 union 失败时退回原始孔洞，交给后续碰撞门继续判定。
+        return hole_rings;
+    }
+        */
+    }
     std::vector<f2c::types::LinearRing> avoidance_rings;
     avoidance_rings.reserve(merged_cells.size());
     for (size_t cell_idx = 0; cell_idx < merged_cells.size(); ++cell_idx) {
@@ -294,6 +327,136 @@ size_t repairRouteConnectionsAroundHoles(
         bool repaired = false;
         const auto repaired_points =
             repairConnectionPolyline(points, avoidance_rings, repaired);
+        if (!repaired) continue;
+
+        f2c::types::MultiPoint repaired_connection;
+        for (const auto& point : repaired_points) {
+            repaired_connection.addPoint(point);
+        }
+        route.setConnection(connection_idx, repaired_connection);
+        ++repaired_connections;
+    }
+    return repaired_connections;
+}
+
+namespace {
+
+f2c::types::Point interpolatePoint(
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    double t)
+{
+    return f2c::types::Point(
+        start.getX() + t * (end.getX() - start.getX()),
+        start.getY() + t * (end.getY() - start.getY()));
+}
+
+bool pointInsidePlanningCell(
+    const f2c::types::Point& point,
+    const f2c::types::Cell& cell)
+{
+    if (!pointInPolygon(
+            point.getX(), point.getY(), cell.getExteriorRing())) {
+        return false;
+    }
+    std::vector<f2c::types::LinearRing> holes;
+    for (size_t i = 0; i + 1 < cell.size(); ++i) {
+        holes.push_back(cell.getInteriorRing(i));
+    }
+    return !pointInAnyHole(point.getX(), point.getY(), holes);
+}
+
+std::vector<f2c::types::Point> repairOutsidePolyline(
+    const std::vector<f2c::types::Point>& points,
+    const f2c::types::Cell& planning_cell,
+    bool& repaired)
+{
+    repaired = false;
+    if (points.size() < 2 || planning_cell.getExteriorRing().size() < 4) {
+        return points;
+    }
+
+    const std::vector<f2c::types::LinearRing> outer_rings {
+        planning_cell.getExteriorRing()};
+    std::vector<f2c::types::Point> result;
+    appendDistinct(result, points.front());
+
+    for (size_t point_idx = 1; point_idx < points.size(); ++point_idx) {
+        const auto& start = points[point_idx - 1];
+        const auto& end = points[point_idx];
+        const auto intersections =
+            findHoleIntersections(start, end, outer_rings);
+        if (intersections.size() < 2) {
+            appendDistinct(result, end);
+            continue;
+        }
+
+        for (size_t interval_idx = 0;
+             interval_idx <= intersections.size(); ++interval_idx) {
+            const double start_t = interval_idx == 0
+                ? 0.0 : intersections[interval_idx - 1].t;
+            const double end_t = interval_idx == intersections.size()
+                ? 1.0 : intersections[interval_idx].t;
+            const auto interval_start =
+                interpolatePoint(start, end, start_t);
+            const auto interval_end = interpolatePoint(start, end, end_t);
+            const auto midpoint = interpolatePoint(
+                interval_start, interval_end, 0.5);
+            if (pointInsidePlanningCell(midpoint, planning_cell) ||
+                interval_idx == 0 ||
+                interval_idx == intersections.size()) {
+                appendDistinct(result, interval_end);
+                continue;
+            }
+
+            const auto detour = walkHoleBoundary(
+                intersections[interval_idx - 1],
+                intersections[interval_idx], outer_rings);
+            for (const auto& point : detour) {
+                appendDistinct(result, point);
+            }
+            repaired = repaired || !detour.empty();
+        }
+    }
+    return result;
+}
+
+}  // namespace
+
+size_t repairRouteConnectionsOutsideCell(
+    f2c::types::Route& route,
+    const f2c::types::Cell& planning_cell)
+{
+    if (route.sizeConnections() == 0 ||
+        planning_cell.getExteriorRing().size() < 4) {
+        return 0;
+    }
+
+    size_t repaired_connections = 0;
+    for (size_t connection_idx = 0;
+         connection_idx < route.sizeConnections(); ++connection_idx) {
+        std::vector<f2c::types::Point> points;
+        if (connection_idx > 0 &&
+            connection_idx - 1 < route.sizeVectorSwaths()) {
+            const auto& previous_swaths = route.getSwaths(connection_idx - 1);
+            if (previous_swaths.size() > 0) {
+                appendDistinct(points, previous_swaths.back().endPoint());
+            }
+        }
+
+        const auto& connection = route.getConnection(connection_idx);
+        for (const auto& point : connection) appendDistinct(points, point);
+
+        if (connection_idx < route.sizeVectorSwaths()) {
+            const auto& next_swaths = route.getSwaths(connection_idx);
+            if (next_swaths.size() > 0) {
+                appendDistinct(points, next_swaths.at(0).startPoint());
+            }
+        }
+
+        bool repaired = false;
+        const auto repaired_points =
+            repairOutsidePolyline(points, planning_cell, repaired);
         if (!repaired) continue;
 
         f2c::types::MultiPoint repaired_connection;

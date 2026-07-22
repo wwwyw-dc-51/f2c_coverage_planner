@@ -455,6 +455,32 @@ TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
         << "Old row-spacing offset (1.5635) must not appear";
 }
 
+TEST(BoundaryFill, SkipsCspaceHoleFillWhenExistingSwathCoversBoundary)
+{
+    auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    full_polygon.addRing(yingshi::makeClosedRing({
+        f2c::types::Point(3.0, 7.0),
+        f2c::types::Point(7.0, 7.0),
+        f2c::types::Point(7.0, 9.0),
+        f2c::types::Point(3.0, 9.0),
+    }));
+    const auto cspace_cell = makeRectangle(3.0, 6.45, 7.0, 7.0);
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(3.0, 6.9615, 7.0, 6.9615, 0.90));
+
+    yingshi::fillBoundaryGaps(
+        swaths, cspace_cell, full_polygon, 0.0, 0.90, 0.0,
+        0.0, 1e-4);
+
+    size_t cspace_boundary_fills = 0;
+    for (const auto& swath : swaths) {
+        if (std::abs(swathMidY(swath) - 6.9999) < 1e-3) {
+            ++cspace_boundary_fills;
+        }
+    }
+    EXPECT_EQ(cspace_boundary_fills, 0U);
+}
+
 double ringSignedArea(const f2c::types::LinearRing& ring)
 {
     double area = 0.0;
@@ -494,6 +520,26 @@ TEST(GeometryNormalization, SnapsDeduplicatesAndOrientsRings)
         normalized.getExteriorRing().getGeometry(1).getY(), 5.0);
     EXPECT_GT(ringSignedArea(normalized.getExteriorRing()), 0.0);
     EXPECT_LT(ringSignedArea(normalized.getInteriorRing(0)), 0.0);
+}
+
+TEST(GeometryNormalization, DoesNotPromoteInteriorRingWhenExteriorIsInvalid)
+{
+    f2c::types::Cell raw;
+    raw.addRing(yingshi::makeClosedRing({
+        f2c::types::Point(0.0, 0.0),
+        f2c::types::Point(1.0, 0.0),
+    }));
+    raw.addRing(yingshi::makeClosedRing({
+        f2c::types::Point(2.0, 2.0),
+        f2c::types::Point(4.0, 2.0),
+        f2c::types::Point(4.0, 4.0),
+        f2c::types::Point(2.0, 4.0),
+        f2c::types::Point(2.0, 2.0),
+    }));
+
+    const auto normalized = yingshi::normalizeCell(raw);
+
+    EXPECT_EQ(normalized.size(), 0U);
 }
 
 TEST(BoundaryFill, UsesPhysicalHalfWidthWhenProvided)
@@ -727,6 +773,77 @@ TEST(HoleAwareRoute, RepairsBorderFillConnectionAddedAfterRoutePlanning)
             path_points[i].getX(), path_points[i].getY(),
             path_points[i + 1].getX(), path_points[i + 1].getY(),
             clearance_area, 50));
+    }
+}
+
+TEST(HoleAwareSwath, SplitsASwathThatCrossesAHole)
+{
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(4.0, 4.0),
+        f2c::types::Point(6.0, 4.0),
+        f2c::types::Point(6.0, 6.0),
+        f2c::types::Point(4.0, 6.0),
+    });
+
+    f2c::types::SwathsByCells swaths_by_cells;
+    f2c::types::Swaths swaths;
+    swaths.push_back(makeSwath(0.0, 5.0, 10.0, 5.0, 0.90));
+    swaths_by_cells.push_back(swaths);
+
+    EXPECT_EQ(
+        yingshi::clipSwathsCrossingHoles(
+            swaths_by_cells, {hole}, 0.5), 1U);
+
+    ASSERT_EQ(swaths_by_cells.size(), 2U);
+    for (const auto& group : swaths_by_cells) {
+        ASSERT_EQ(group.size(), 1U);
+        const auto& swath = group.at(0);
+        EXPECT_FALSE(yingshi::segmentCrossesHole(
+            swath.startPoint().getX(), swath.startPoint().getY(),
+            swath.endPoint().getX(), swath.endPoint().getY(),
+            {hole}, 50));
+        EXPECT_GE(yingshi::swathLength(swath), 0.5);
+    }
+}
+
+TEST(RouteBoundary, RepairsConnectionAcrossAnOuterConcavity)
+{
+    const auto planning_cell = f2c::types::Cell(
+        yingshi::makeClosedRing({
+            f2c::types::Point(0.0, 0.0),
+            f2c::types::Point(6.0, 0.0),
+            f2c::types::Point(6.0, 3.0),
+            f2c::types::Point(7.0, 3.0),
+            f2c::types::Point(7.0, 0.0),
+            f2c::types::Point(12.0, 0.0),
+            f2c::types::Point(12.0, 8.0),
+            f2c::types::Point(0.0, 8.0)}));
+
+    f2c::types::Route route;
+    f2c::types::Swaths left_group;
+    left_group.push_back(makeSwath(5.475, 0.375, 5.0, 0.375));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), left_group);
+    yingshi::appendConnectedSwath(
+        route, f2c::types::MultiPoint(),
+        makeSwath(11.475, 0.375, 11.0, 0.375));
+
+    EXPECT_EQ(
+        yingshi::repairRouteConnectionsOutsideCell(route, planning_cell), 1U);
+
+    const auto path_points = yingshi::materializePath(
+        yingshi::planDirectPath(route, 1.0));
+    f2c::types::Cells allowed;
+    allowed.addGeometry(planning_cell);
+    for (size_t i = 0; i + 1 < path_points.size(); ++i) {
+        f2c::types::LineString segment;
+        segment.addPoint(path_points[i]);
+        segment.addPoint(path_points[i + 1]);
+        double inside_length = 0.0;
+        const auto inside = allowed.getLinesInside(segment);
+        for (size_t j = 0; j < inside.size(); ++j) {
+            inside_length += inside.getGeometry(j).length();
+        }
+        EXPECT_GE(inside_length + 1e-5, segment.length());
     }
 }
 

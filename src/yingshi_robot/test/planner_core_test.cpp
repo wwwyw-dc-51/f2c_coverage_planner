@@ -22,6 +22,20 @@ f2c::types::LinearRing makeRing(
     return ring;
 }
 
+f2c::types::LinearRing makeRing(
+    const std::vector<std::pair<double, double>>& vertices)
+{
+    f2c::types::LinearRing ring;
+    for (const auto& [x, y] : vertices) {
+        ring.addPoint(f2c::types::Point(x, y));
+    }
+    if (!vertices.empty()) {
+        ring.addPoint(f2c::types::Point(
+            vertices.front().first, vertices.front().second));
+    }
+    return ring;
+}
+
 yingshi::PlanningRequest makeNotchedRequest()
 {
     yingshi::PlanningRequest request;
@@ -78,6 +92,54 @@ yingshi::PlanningRequest makeSplitRoomRequest()
     return request;
 }
 
+yingshi::PlanningRequest makeFactoryWorkshopRequest()
+{
+    yingshi::PlanningRequest request;
+    request.polygon.addRing(makeRing({
+        {0.0, 0.0}, {30.0, 0.0}, {30.0, 20.0}, {0.0, 20.0}}));
+    const std::vector<std::vector<std::pair<double, double>>> hole_vertices {
+        {{4.0, 4.0}, {4.6, 4.0}, {4.6, 4.6}, {4.0, 4.6}},
+        {{15.0, 4.5}, {15.6, 4.5}, {15.6, 5.1}, {15.0, 5.1}},
+        {{25.5, 3.0}, {26.1, 3.0}, {26.1, 3.6}, {25.5, 3.6}},
+        {{3.5, 15.0}, {4.1, 15.0}, {4.1, 15.6}, {3.5, 15.6}},
+        {{26.0, 14.0}, {26.6, 14.0}, {26.6, 14.6}, {26.0, 14.6}},
+        {{1.5, 8.0}, {9.5, 8.0}, {9.5, 8.8}, {1.5, 8.8}},
+        {{2.0, 10.3}, {9.0, 10.3}, {9.0, 11.1}, {2.0, 11.1}},
+        {{18.0, 6.0}, {24.0, 6.0}, {24.0, 12.0}, {18.0, 12.0}},
+        {{16.0, 16.0}, {22.0, 16.0}, {22.0, 19.0}, {16.0, 19.0}},
+        {{9.0, 14.0}, {14.0, 13.0}, {16.0, 16.5},
+         {12.0, 18.5}, {7.0, 17.0}},
+    };
+    for (const auto& vertices : hole_vertices) {
+        auto hole = makeRing(vertices);
+        request.polygon.addRing(hole);
+        request.holes.push_back(hole);
+    }
+
+    request.robot_width = 0.75;
+    request.coverage_width = 0.90;
+    request.mid_hl_width_ratio = 0.20;
+    request.no_hl_width_ratio = 0.0;
+    request.swath_overlap_ratio = 0.03;
+    request.swath_endpoint_shrink_distance = 0.03;
+    request.min_swath_length = 0.5;
+    request.decomposition_enabled = true;
+    request.use_sweep_decomp = true;
+    request.merge_angle_threshold = 60.0;
+    request.swath_angle_optimization = true;
+    request.swath_order_type = "boustrophedon";
+    request.turn_planner_type = "direct";
+    request.filter_tiny_cells = true;
+    request.path_simplify_enabled = true;
+    request.path_simplify_tolerance = 0.05;
+    request.path_simplify_turn_threshold = 0.15;
+    request.boundary_type = "closed";
+    request.traversability_enabled = true;
+    request.cspace_clearance_margin = 0.0;
+    request.max_excluded_area_ratio = 0.05;
+    return request;
+}
+
 double pathLength(const std::vector<f2c::types::Point>& points)
 {
     double length = 0.0;
@@ -121,6 +183,88 @@ TEST(PlannerCore, MatchesValidatedNotchedRouteBaseline)
     EXPECT_EQ(result.total_swaths, 52U);  // Phase 4A sweep alignment + adaptive headland
     EXPECT_NEAR(pathLength(result.path_points), 454.51, 2.0);
     EXPECT_FALSE(result.path_has_crossings);
+}
+
+TEST(PlannerCore, KeepsTraversableHoleRouteSafeAfterSimplification)
+{
+    yingshi::PlannerCore planner;
+    auto request = makeNotchedRequest();
+    request.polygon = f2c::types::Cell();
+    request.polygon.addRing(makeRing({
+        {0.0, 0.0}, {6.0, 0.0}, {6.0, 3.0}, {7.0, 3.0},
+        {7.0, 0.0}, {12.0, 0.0}, {12.0, 8.0}, {7.0, 8.0},
+        {7.0, 5.0}, {6.0, 5.0}, {6.0, 8.0}, {0.0, 8.0}}));
+    const auto hole = makeRing({
+        {8.0, 2.0}, {11.0, 2.0}, {11.0, 4.0}, {8.0, 4.0}});
+    request.polygon.addRing(hole);
+    request.holes = {hole};
+    request.traversability_enabled = true;
+
+    const auto result = planner.plan(request);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_FALSE(result.path_has_crossings);
+}
+
+TEST(PlannerCore, KeepsDenseHoleRoutesSafe)
+{
+    yingshi::PlannerCore planner;
+    auto request = makeNotchedRequest();
+    request.polygon = f2c::types::Cell();
+    request.polygon.addRing(makeRing({
+        {0.0, 0.0}, {17.5, 0.0}, {17.5, 18.0}, {0.0, 18.0}}));
+    const std::vector<std::pair<double, double>> x_ranges {
+        {3.0, 5.0}, {6.5, 8.5}, {10.0, 12.0}, {13.5, 15.5}};
+    const std::vector<std::pair<double, double>> y_ranges {
+        {3.0, 6.0}, {7.5, 10.5}, {12.0, 15.0}};
+    std::vector<f2c::types::LinearRing> holes;
+    for (const auto& [min_y, max_y] : y_ranges) {
+        for (const auto& [min_x, max_x] : x_ranges) {
+            holes.push_back(makeRing({
+                {min_x, min_y}, {max_x, min_y},
+                {max_x, max_y}, {min_x, max_y}}));
+            request.polygon.addRing(holes.back());
+        }
+    }
+    request.holes = holes;
+    request.traversability_enabled = true;
+
+    const auto result = planner.plan(request);
+    if (!result.component_plans.empty()) {
+        const auto& component = result.component_plans.front();
+        std::vector<f2c::types::LinearRing> component_holes;
+        for (std::size_t i = 0;
+             i + 1 < component.planning_polygon.size(); ++i) {
+            component_holes.push_back(
+                component.planning_polygon.getInteriorRing(i));
+        }
+        for (std::size_t i = 0; i + 1 < component.path_points.size(); ++i) {
+            if (yingshi::segmentCrossesHole(
+                    component.path_points[i].getX(),
+                    component.path_points[i].getY(),
+                    component.path_points[i + 1].getX(),
+                    component.path_points[i + 1].getY(),
+                    component_holes,
+                    50)) {
+                ADD_FAILURE() << "dense crossing segment " << i << " ("
+                              << component.path_points[i].getX() << ", "
+                              << component.path_points[i].getY() << ") -> ("
+                              << component.path_points[i + 1].getX() << ", "
+                              << component.path_points[i + 1].getY() << ")";
+                break;
+            }
+        }
+    }
+    ASSERT_TRUE(result.success) << result.error_message;
+}
+
+TEST(PlannerCore, KeepsFactoryWorkshopRouteInsideCspace)
+{
+    yingshi::PlannerCore planner;
+
+    const auto result = planner.plan(makeFactoryWorkshopRequest());
+
+    ASSERT_TRUE(result.success) << result.error_message;
 }
 
 TEST(PlannerCore, RejectsAPlanThatExceedsTheExclusionGate)

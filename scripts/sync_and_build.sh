@@ -6,7 +6,7 @@
 #   ./sync_and_build.sh --batch              # 同步+编译+8场景批量测试+渲染+拉回结果
 #   ./sync_and_build.sh --compare            # 同步+编译+S3/S4/S6 自定义 vs Snake 对比
 #   ./sync_and_build.sh --run                # 同步+编译+远程启动 S8 RViz 演示
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 自动定位项目根目录：无论脚本放在 scripts/ 还是项目根，都能找到 src/
@@ -45,19 +45,24 @@ fi
 # ── Step 1: 同步源码 ──
 echo "📤 Syncing sources..."
 # 同步所有源码 + 模块文件 + 脚本
+ssh "${VM_HOST}" "mkdir -p ${WS}/src/yingshi_robot/src ${WS}/src/yingshi_robot/include/yingshi_robot ${WS}/src/yingshi_robot/test ${WS}/src/yingshi_robot/config ${WS}/scripts"
 scp -q "$PROJECT_ROOT/src/yingshi_robot/src/"*.cpp "${VM_HOST}:${WS}/src/yingshi_robot/src/"
 scp -q "$PROJECT_ROOT/src/yingshi_robot/src/"*.hpp "${VM_HOST}:${WS}/src/yingshi_robot/src/"
 scp -q "$PROJECT_ROOT/src/yingshi_robot/include/yingshi_robot/"*.hpp "${VM_HOST}:${WS}/src/yingshi_robot/include/yingshi_robot/"
 scp -q "$PROJECT_ROOT/src/yingshi_robot/CMakeLists.txt" "${VM_HOST}:${WS}/src/yingshi_robot/"
-ssh "${VM_HOST}" "mkdir -p ${WS}/src/yingshi_robot/test" 2>/dev/null || true
-scp -q -r "$PROJECT_ROOT/src/yingshi_robot/test/"*.cpp "${VM_HOST}:${WS}/src/yingshi_robot/test/" 2>/dev/null || true
-scp -q "$PROJECT_ROOT/scripts/"*.sh "${VM_HOST}:${WS}/scripts/" 2>/dev/null || true
-scp -q "$PROJECT_ROOT/scripts/"*.py "${VM_HOST}:${WS}/scripts/" 2>/dev/null || true
+scp -q "$PROJECT_ROOT/src/yingshi_robot/package.xml" "${VM_HOST}:${WS}/src/yingshi_robot/"
+scp -q -r "$PROJECT_ROOT/src/yingshi_robot/config" "${VM_HOST}:${WS}/src/yingshi_robot/"
+scp -q -r "$PROJECT_ROOT/src/yingshi_robot/test_polygons" "${VM_HOST}:${WS}/src/yingshi_robot/"
+scp -q -r "$PROJECT_ROOT/src/yingshi_robot/scripts" "${VM_HOST}:${WS}/src/yingshi_robot/"
+scp -q "$PROJECT_ROOT/src/yingshi_robot/test/"*.cpp "${VM_HOST}:${WS}/src/yingshi_robot/test/"
+scp -q "$PROJECT_ROOT/scripts/"*.sh "${VM_HOST}:${WS}/scripts/"
+scp -q "$PROJECT_ROOT/scripts/"*.py "${VM_HOST}:${WS}/scripts/"
+ssh "${VM_HOST}" "find ${WS}/scripts ${WS}/src/yingshi_robot/scripts -type f -name '*.sh' -exec sed -i 's/\\r$//' {} +"
 echo "   Done."
 
 # ── Step 2: 编译 ──
 echo "🔨 Building..."
-BUILD_OUT=$(ssh "${VM_HOST}" "cd ${WS} && source /opt/ros/humble/setup.bash && colcon build --packages-select yingshi_robot 2>&1")
+BUILD_OUT=$(ssh "${VM_HOST}" "cd ${WS} && rm -rf build/yingshi_robot && source /opt/ros/humble/setup.bash && colcon build --packages-select yingshi_robot --symlink-install 2>&1")
 if echo "$BUILD_OUT" | grep -qE "error:|fatal error"; then
     echo "❌ Build failed:"
     echo "$BUILD_OUT" | grep -E "error:|fatal error" | head -10
@@ -79,21 +84,28 @@ if [[ "$MODE" == "--test" ]]; then
 elif [[ "$MODE" == "--batch" ]]; then
     echo ""
     echo "📊 Batch testing 8 scenarios..."
-    TIMESTAMP=$(date +%m%d_%H%M)
+    TIMESTAMP=$(date +%m%d_%H%M%S)
     VM_RESULT="$WS/test_results/batch_${TIMESTAMP}"
     mkdir -p "$RESULT_BASE/batch_${TIMESTAMP}"
 
+    set +e
     ssh "${VM_HOST}" "
         source /opt/ros/humble/setup.bash && source ${WS}/install/setup.bash && \
-        export LD_LIBRARY_PATH=${WS}/install/lib:${WS}/src/Fields2Cover/build/_deps/steering_functions-build:${WS}/src/Fields2Cover/third_party/ortools-src/lib:\$LD_LIBRARY_PATH && \
         bash ${WS}/scripts/batch_test_v2.sh ${VM_RESULT} 2>&1
     " 2>&1 | tee /tmp/f2c_batch.log
+    BATCH_STATUS=${PIPESTATUS[0]}
+    set -e
 
     echo ""
     echo "📥 Copying results..."
     scp -q "${VM_HOST}:${VM_RESULT}/*.png" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
     scp -q "${VM_HOST}:${VM_RESULT}/*.json" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
     scp -q "${VM_HOST}:${VM_RESULT}/*.txt" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
+    scp -q "${VM_HOST}:${VM_RESULT}/*.log" "$RESULT_BASE/batch_${TIMESTAMP}/" 2>/dev/null || true
+    if [ "$BATCH_STATUS" -ne 0 ]; then
+        echo "Batch test failed with exit code $BATCH_STATUS"
+        exit "$BATCH_STATUS"
+    fi
     echo "   → $RESULT_BASE/batch_${TIMESTAMP}/"
 
 # ── Mode: --compare ──

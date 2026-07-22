@@ -336,6 +336,78 @@ void fillBoundaryGaps(
     const double boundary_offset = boundary_offset_override >= 0.0
         ? boundary_offset_override
         : std::max(cov_width * 0.5, robot_half_width);
+    const bool cspace_boundary_mode = boundary_offset_override >= 0.0;
+
+    // C-space 孔洞边界本身已经是机器人中心的安全边界。若已有 swath
+    // 的覆盖带能够覆盖候选边界线，再补一条贴边 swath 只会制造窄矩形
+    // 往返，不会增加可覆盖面积。
+    const auto isCoveredByExistingSwath =
+        [&](const f2c::types::LineString& candidate) {
+            if (!cspace_boundary_mode || candidate.size() < 2 ||
+                cov_width <= 0.0) {
+                return false;
+            }
+
+            const auto& candidate_start = candidate.getGeometry(0);
+            const auto& candidate_end = candidate.getGeometry(1);
+            const double dx = candidate_end.getX() - candidate_start.getX();
+            const double dy = candidate_end.getY() - candidate_start.getY();
+            const double length = std::hypot(dx, dy);
+            if (length < 1e-9) return false;
+
+            const double ux = dx / length;
+            const double uy = dy / length;
+            const double nx = -uy;
+            const double ny = ux;
+            const double candidate_along_min = 0.0;
+            const double candidate_along_max = length;
+
+            for (const auto& swath : cell_swaths) {
+                const auto start = swath.startPoint();
+                const auto end = swath.endPoint();
+                const double swath_dx = end.getX() - start.getX();
+                const double swath_dy = end.getY() - start.getY();
+                const double swath_length =
+                    std::hypot(swath_dx, swath_dy);
+                if (swath_length < 1e-9) continue;
+
+                const double parallel = std::abs(
+                    (swath_dx * ux + swath_dy * uy) / swath_length);
+                if (parallel < 0.999) continue;
+
+                const auto normal_distance = [&](double x, double y) {
+                    return std::abs(
+                        (x - candidate_start.getX()) * nx +
+                        (y - candidate_start.getY()) * ny);
+                };
+                const double max_normal_distance = std::max({
+                    normal_distance(start.getX(), start.getY()),
+                    normal_distance(end.getX(), end.getY()),
+                    normal_distance(
+                        0.5 * (start.getX() + end.getX()),
+                        0.5 * (start.getY() + end.getY()))});
+                if (max_normal_distance > cov_width * 0.5 + 1e-6) {
+                    continue;
+                }
+
+                const double swath_along_start =
+                    (start.getX() - candidate_start.getX()) * ux +
+                    (start.getY() - candidate_start.getY()) * uy;
+                const double swath_along_end =
+                    (end.getX() - candidate_start.getX()) * ux +
+                    (end.getY() - candidate_start.getY()) * uy;
+                const double overlap = std::min(
+                    candidate_along_max,
+                    std::max(swath_along_start, swath_along_end)) -
+                    std::max(
+                        candidate_along_min,
+                        std::min(swath_along_start, swath_along_end));
+                if (overlap >= length - cov_width - 1e-6) {
+                    return true;
+                }
+            }
+            return false;
+        };
     /*
 
     // 原始几何下，边界补线至少要为实体外形保留横向净空。
@@ -788,6 +860,8 @@ void fillBoundaryGaps(
                     seg.getGeometry(1).getX() - seg.getGeometry(0).getX(),
                     seg.getGeometry(1).getY() - seg.getGeometry(0).getY());
                 if (seg_len < cov_width * 0.5) continue;
+
+                if (isCoveredByExistingSwath(seg)) continue;
 
                 f2c::types::Swath fill_sw(seg, cov_width);
 

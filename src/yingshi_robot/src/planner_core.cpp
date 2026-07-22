@@ -39,28 +39,93 @@ size_t countCrossings(
     return n;
 }
 
+bool pointOnRingBoundary(
+    const f2c::types::Point& point,
+    const f2c::types::LinearRing& ring,
+    double tolerance)
+{
+    for (std::size_t i = 0; i + 1 < ring.size(); ++i) {
+        const auto& start = ring.getGeometry(i);
+        const auto& end = ring.getGeometry(i + 1);
+        const double dx = end.getX() - start.getX();
+        const double dy = end.getY() - start.getY();
+        const double length_squared = dx * dx + dy * dy;
+        if (length_squared <= 1e-18) continue;
+        const double t = std::clamp(
+            ((point.getX() - start.getX()) * dx +
+             (point.getY() - start.getY()) * dy) / length_squared,
+            0.0, 1.0);
+        const double closest_x = start.getX() + t * dx;
+        const double closest_y = start.getY() + t * dy;
+        if (std::hypot(point.getX() - closest_x,
+                       point.getY() - closest_y) <= tolerance) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pointInsideCellWithBoundaryTolerance(
+    const f2c::types::Point& point,
+    const f2c::types::Cell& cell)
+{
+    constexpr double kBoundaryTolerance = 1e-6;
+    const auto& exterior = cell.getExteriorRing();
+    const bool inside_exterior =
+        pointInPolygon(point.getX(), point.getY(), exterior) ||
+        pointOnRingBoundary(point, exterior, kBoundaryTolerance);
+    if (!inside_exterior) return false;
+
+    for (std::size_t i = 0; i + 1 < cell.size(); ++i) {
+        const auto& hole = cell.getInteriorRing(i);
+        if (pointInPolygon(point.getX(), point.getY(), hole) &&
+            !pointOnRingBoundary(point, hole, kBoundaryTolerance)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 size_t countSegmentsOutsideCell(
     const std::vector<f2c::types::Point>& points,
     const f2c::types::Cell& cell)
 {
     if (points.size() < 2) return 0;
-    f2c::types::Cells allowed;
-    allowed.addGeometry(cell);
+
+    std::vector<f2c::types::LinearRing> hole_rings;
+    for (std::size_t i = 0; i + 1 < cell.size(); ++i) {
+        hole_rings.push_back(cell.getInteriorRing(i));
+    }
+
+    constexpr double kSampleSpacing = 0.05;
     std::size_t violations = 0;
     for (std::size_t i = 0; i + 1 < points.size(); ++i) {
-        f2c::types::LineString segment;
-        segment.addPoint(points[i]);
-        segment.addPoint(points[i + 1]);
-        const double segment_length = segment.length();
+        const auto& start = points[i];
+        const auto& end = points[i + 1];
+        const double segment_length = start.distance(end);
         if (segment_length <= 1e-9) continue;
-        const auto inside_parts = allowed.getLinesInside(segment);
-        double inside_length = 0.0;
-        for (std::size_t j = 0; j < inside_parts.size(); ++j) {
-            inside_length += inside_parts.getGeometry(j).length();
+
+        const std::size_t sample_count = std::max<std::size_t>(
+            2, static_cast<std::size_t>(
+                std::ceil(segment_length / kSampleSpacing)));
+        bool outside = false;
+        for (std::size_t sample = 0; sample <= sample_count; ++sample) {
+            const double t = static_cast<double>(sample) /
+                static_cast<double>(sample_count);
+            const f2c::types::Point point(
+                start.getX() + t * (end.getX() - start.getX()),
+                start.getY() + t * (end.getY() - start.getY()));
+            if (!pointInsideCellWithBoundaryTolerance(point, cell)) {
+                outside = true;
+                break;
+            }
         }
-        if (inside_length + 1e-5 < segment_length) {
-            ++violations;
+        if (!outside && !hole_rings.empty() && segmentCrossesHole(
+                start.getX(), start.getY(), end.getX(), end.getY(),
+                hole_rings, 50)) {
+            outside = true;
         }
+        if (outside) ++violations;
     }
     return violations;
 }
@@ -94,7 +159,7 @@ double holeRepairClearance(
     const PlanningRequest& req,
     bool cspace_constrained)
 {
-    if (cspace_constrained) return 1e-4;
+    if (cspace_constrained) return 0.0;
 
     const double coverage_half_width = 0.5 * req.coverage_width;
     if (!req.physical_collision_check_enabled) {
@@ -362,9 +427,14 @@ PlanningComponentResult planSingleComponent(
         pruneRedundantCellSeamFills(
             swaths_by_cells, no_hl, req.polygon, req.coverage_width);
 
+        if (!req.holes.empty()) {
+            clipSwathsCrossingHoles(
+                swaths_by_cells, req.holes, req.min_swath_length);
+        }
+
         // ── 5. 孔洞裁剪 ──
-        // （当前未实现 standalone splitSwathsCrossingHoles；
-        //  孔洞处理由下游 repairRouteConnectionsAroundHoles 覆盖）
+        // 先把穿过孔洞的单条 swath 切成安全片段，避免后续 Route
+        // 连接器把本应断开的两侧重新视为同一条工作线。
 
         // ── 6. Swath + Cell 排序 ──
         std::vector<size_t> cell_order;
@@ -394,6 +464,7 @@ PlanningComponentResult planSingleComponent(
             synchronizeRouteConnectionEndpoints(
                 route, connection_clearance);
         }
+        repairRouteConnectionsOutsideCell(route, req.polygon);
 
         // ── 9. 边界策略：闭合边界收缩端点 / 开放边界延伸 ──
         {
@@ -402,7 +473,8 @@ PlanningComponentResult planSingleComponent(
                 req.swath_endpoint_shrink_distance,
                 req.boundary_coverage_margin,
                 req.boundary_open_default_margin);
-            if (std::abs(margin) > 1e-9) {
+            if (std::abs(margin) > 1e-9 &&
+                !(cspace_constrained && !req.holes.empty())) {
                 const auto& outer = req.polygon.getExteriorRing();
                 std::vector<f2c::types::LinearRing> hr;
                 for (size_t ri = 0; ri + 1 < req.polygon.size(); ++ri)
@@ -420,6 +492,7 @@ PlanningComponentResult planSingleComponent(
                 route, req.holes,
                 holeRepairClearance(req, cspace_constrained));
         }
+        repairRouteConnectionsOutsideCell(route, req.polygon);
 
         if (req.physical_collision_check_enabled && !cspace_constrained) {
             const auto endpoint_repairs =
@@ -459,12 +532,40 @@ PlanningComponentResult planSingleComponent(
         }
 
         // ── 10. 路径后处理 ──
+        const auto unsimplified_path = path;
         if (req.path_simplify_enabled && path.size() > 0) {
             auto states = simplifyPathRDP(
                 path, req.path_simplify_tolerance,
                 req.path_simplify_turn_threshold);
             path = f2c::types::Path();
             for (auto& s : states) path.addState(s);
+        }
+
+        if (cspace_constrained && req.path_simplify_enabled) {
+            const auto simplified_points = materializePath(path);
+            const bool simplification_is_unsafe =
+                countCrossings(simplified_points, req.holes) > 0 ||
+                countSegmentsOutsideCell(
+                    simplified_points, req.polygon) > 0;
+            if (simplification_is_unsafe) {
+                // RDP 可能把绕孔洞的折线压成一条穿洞弦线；C-space
+                // 路径宁可保留原始折点，也不能牺牲碰撞安全性。
+                path = unsimplified_path;
+            }
+        }
+
+        if (req.physical_collision_check_enabled && !cspace_constrained &&
+            req.path_simplify_enabled) {
+            const auto simplified_collision = checkPathFootprintCollision(
+                path, req.polygon, req.holes, req.physical_footprint);
+            if (simplified_collision.collision) {
+                const auto original_collision = checkPathFootprintCollision(
+                    unsimplified_path, req.polygon, req.holes,
+                    req.physical_footprint);
+                if (!original_collision.collision) {
+                    path = unsimplified_path;
+                }
+            }
         }
 
         // ── 11. 展平路径 + 诊断 ──
@@ -486,8 +587,25 @@ PlanningComponentResult planSingleComponent(
                 result.out_of_planning_area_segments > 0;
         }
         if (req.physical_collision_check_enabled && !cspace_constrained) {
+            // 碰撞检查前将 polygon 向外 buffer，避免 swath 端点贴边时
+            // footprint 被误判为"超出边界"。
+            const double footprint_buffer =
+                physicalFootprintClearanceRadius(req.physical_footprint);
+            const auto buffered_polygon =
+                f2c::types::Cell::buffer(req.polygon, footprint_buffer);
+            // 孔洞也向内缩一个 buffer，避免贴洞边时被误判为"intersects obstacle"
+            std::vector<f2c::types::LinearRing> buffered_holes;
+            buffered_holes.reserve(req.holes.size());
+            for (const auto& hole : req.holes) {
+                if (hole.size() < 4) continue;
+                auto shrunk = f2c::types::Cell::buffer(
+                    f2c::types::Cell(hole), -footprint_buffer);
+                if (shrunk.size() > 0) {
+                    buffered_holes.push_back(shrunk.getExteriorRing());
+                }
+            }
             result.physical_collision = checkPathFootprintCollision(
-                path, req.polygon, req.holes, req.physical_footprint);
+                path, buffered_polygon, buffered_holes, req.physical_footprint);
         }
         if (result.path_has_crossings) {
             result.error_message =

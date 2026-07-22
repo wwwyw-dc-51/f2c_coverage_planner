@@ -26,7 +26,7 @@ REQUIRED_EVAL_METRICS = (
     "net_area",
 )
 BOUNDED_EVAL_METRICS = {
-    "coverage_rate": (0.0, 100.5),
+    "coverage_rate": (0.0, 100.0),
     "single_score": (0.0, 100.0),
 }
 NON_NEGATIVE_EVAL_METRICS = (
@@ -152,11 +152,11 @@ def validate_report(report, coverage_threshold=0.99):
             report.get("eval"), "eval", coverage_threshold, errors)
 
     cspace = report.get("cspace")
-    if not isinstance(cspace, dict):
+    if not isinstance(cspace, dict) or not cspace:
+        errors.append("cspace 缺失或为空")
         cspace = {}
-    # C-space 仅在 traversability 启用时存在；未启用则跳过 C-space 门控
-    cspace_populated = cspace.get("valid") is not None and cspace
-    if cspace_populated:
+    # 生产批测必须启用 traversability，C-space 是结果完整性的必需证据。
+    if cspace:
         if cspace.get("valid") is not True:
             errors.append("cspace.valid 未成功")
         for field_name in CSPACE_AREA_FIELDS + CSPACE_RATIO_FIELDS:

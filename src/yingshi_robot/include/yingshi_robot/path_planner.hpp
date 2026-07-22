@@ -29,6 +29,11 @@ size_t repairRouteConnectionsAroundHoles(
     const std::vector<f2c::types::LinearRing>& hole_rings,
     double clearance);
 
+// 修复穿过外环凹口的连接段，保证连接折线留在规划 Cell 内。
+size_t repairRouteConnectionsOutsideCell(
+    f2c::types::Route& route,
+    const f2c::types::Cell& planning_cell);
+
 // swath 端点缩进后，同步每条跨 group connection 的首尾点。
 // 距新端点不超过 max_endpoint_shift 的单控制点视为旧端点并删除；
 // 更远的单控制点和多点 connection 的中间绕障点保持不变。

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # F2C 21场景批量测试 v2 — 每场景独立隔离，避免 topic 串扰
-set -eu
+set -euo pipefail
 
 WS="$HOME/f2c_coverage_planner"
 RESULT_DIR="${1:-$WS/test_results/batch_$(date +%m%d_%H%M)}"
@@ -41,6 +41,7 @@ declare -A SCENARIOS=(
 
 PLANNER_PARAMS=(
     -p use_planner_core:=true
+    -p traversability_enabled:=true
     -p robot_width:=0.75
     -p coverage_width:=0.90
     -p mid_hl_width_ratio:=0.20
@@ -455,8 +456,6 @@ for NAME in $ALL_SCENARIOS; do
         python3 "$WS/scripts/render_coverage.py" "$NAME" "$YAML" "$DATA_FILE" "$CELLS_PNG" --mode cells 2>&1
 
         # Cell 间连接图
-        CONN_PNG="$RESULT_DIR/${NAME}_connections.png"
-        python3 "$WS/scripts/render_coverage.py" "$NAME" "$YAML" "$DATA_FILE" "$CONN_PNG" --mode connections 2>&1
     fi
 done
 

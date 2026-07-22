@@ -66,6 +66,38 @@ bool allHolesAreAxisAlignedRects(const f2c::types::Cell& cell)
     return cell.size() > 1;  // 至少有一个孔洞才返回 true
 }
 
+f2c::types::Cells safeDifference(
+    const f2c::types::Cells& source,
+    const f2c::types::Cells& cutter)
+{
+    if (source.size() == 0 || cutter.size() == 0) return source;
+    try {
+        const auto difference = source.difference(cutter);
+        // 空结果不能解释为整个作业区消失，保留原几何交给后续门控。
+        return difference.size() == 0 ? source : difference;
+    } catch (...) {
+        return source;
+    }
+}
+
+f2c::types::Cells safeSubtractHole(
+    const f2c::types::Cells& source,
+    const f2c::types::LinearRing& hole_ring)
+{
+    if (source.size() == 0 || hole_ring.size() < 4) return source;
+
+    try {
+        f2c::types::Cell hole_cell;
+        hole_cell.addRing(hole_ring);
+        f2c::types::Cells hole_cells;
+        hole_cells.addGeometry(hole_cell);
+        hole_cells = hole_cells.buffer(0.001);
+        return safeDifference(source, hole_cells);
+    } catch (...) {
+        return source;
+    }
+}
+
 }  // namespace
 
 f2c::types::Cells rectilinearDecompose(
@@ -164,12 +196,8 @@ f2c::types::Cells rectilinearDecompose(
                         f2c::types::Cells fallback;
                         fallback.addGeometry(cell);
                         for (size_t fhi = 0; fhi + 1 < cell.size(); ++fhi) {
-                            f2c::types::Cell fh;
-                            fh.addRing(cell.getInteriorRing(fhi));
-                            f2c::types::Cells fhc;
-                            fhc.addGeometry(fh);
-                            fhc = fhc.buffer(0.001);
-                            fallback = fallback.difference(fhc);
+                            fallback = safeSubtractHole(
+                                fallback, cell.getInteriorRing(fhi));
                         }
                         for (size_t fi = 0; fi < fallback.size(); ++fi)
                             result.addGeometry(fallback.getGeometry(fi));
@@ -220,12 +248,8 @@ f2c::types::Cells rectilinearDecompose(
                                 f2c::types::Cells fallback;
                                 fallback.addGeometry(sc);
                                 for (size_t fhi = 0; fhi + 1 < sc.size(); ++fhi) {
-                                    f2c::types::Cell fh;
-                                    fh.addRing(sc.getInteriorRing(fhi));
-                                    f2c::types::Cells fhc;
-                                    fhc.addGeometry(fh);
-                                    fhc = fhc.buffer(0.001);
-                                    fallback = fallback.difference(fhc);
+                                    fallback = safeSubtractHole(
+                                        fallback, sc.getInteriorRing(fhi));
                                 }
                                 for (size_t fi = 0; fi < fallback.size(); ++fi)
                                     result.addGeometry(fallback.getGeometry(fi));
@@ -255,9 +279,16 @@ f2c::types::Cells rectilinearDecompose(
                 if(hy<h_min_y)h_min_y=hy;
                 if(hy>h_max_y)h_max_y=hy;
             }
-            f2c::types::Cell hole_cell; hole_cell.addRing(hr);
-            f2c::types::Cells hole_cells; hole_cells.addGeometry(hole_cell);
-            hole_cells = hole_cells.buffer(0.001);
+            f2c::types::Cells hole_cells;
+            try {
+                f2c::types::Cell hole_cell;
+                hole_cell.addRing(hr);
+                hole_cells.addGeometry(hole_cell);
+                hole_cells = hole_cells.buffer(0.001);
+            } catch (...) {
+                // 单个孔洞缓冲失败时保留当前结果，不中断整个分解。
+                continue;
+            }
 
             f2c::types::Cells cleaned;
             for (size_t ci = 0; ci < result.size(); ++ci) {
@@ -276,7 +307,7 @@ f2c::types::Cells rectilinearDecompose(
                                 c_min_y < h_max_y && c_max_y > h_min_y);
                 if (overlaps) {
                     f2c::types::Cells tmp; tmp.addGeometry(mc);
-                    auto diff = tmp.difference(hole_cells);
+                    auto diff = safeDifference(tmp, hole_cells);
                     for (size_t di = 0; di < diff.size(); ++di)
                         cleaned.addGeometry(diff.getGeometry(di));
                 } else {
@@ -564,7 +595,19 @@ CellMergeResult mergeCellsWithSimilarDirection(
             }
 
             f2c::types::Cells temporary(merged_cell);
-            auto union_result = temporary.unionOp(cells.getGeometry(i));
+            f2c::types::Cells union_result;
+            try {
+                union_result = temporary.unionOp(cells.getGeometry(i));
+            } catch (...) {
+                merged_cells.addGeometry(cells.getGeometry(i));
+                continue;
+                /*
+                // GEOS/GDAL 拓扑异常时保留当前单元，禁止缩小作业区。
+                merged_cells.addGeometry(cells.getGeometry(i));
+                continue;
+            }
+                */
+            }
             if (union_result.size() == 0) {
                 // 拓扑运算失败时保留当前单元，不能静默缩小作业区。
                 merged_cells.addGeometry(cells.getGeometry(i));
@@ -667,8 +710,26 @@ f2c::types::Cells mergeAdjacentSweepStrips(
         if (group_cells.size() == 1) {
             result.addGeometry(group_cells.getGeometry(0));
         } else {
-            auto merged = group_cells.unionCascaded();
+            f2c::types::Cells merged;
+            try {
+                merged = group_cells.unionCascaded();
+            } catch (...) {
+                for (size_t i = 0; i < n; ++i) {
+                    if (group_id[find(i)] == g)
+                        result.addGeometry(cells.getGeometry(i));
+                }
+                continue;
+                /*
+                // union 失败时回退到原始条带，避免整条规划流水线崩溃。
+                for (size_t i = 0; i < n; ++i) {
+                    if (group_id[find(i)] == g)
+                        result.addGeometry(cells.getGeometry(i));
+                }
+                continue;
+            }
             // 拓扑运算失败时保留原始 cell，不能静默丢弃作业区
+                */
+            }
             if (merged.size() == 0) {
                 for (size_t i = 0; i < n; ++i) {
                     if (group_id[find(i)] == g)

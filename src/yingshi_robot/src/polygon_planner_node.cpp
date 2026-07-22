@@ -1813,13 +1813,49 @@ private:
         }
         if (!result.component_plans.empty()) json << "\n  ";
         json << "],\n  \"connections\": [";
-        // 从 route 的连接信息生成 cell 间连接
-        for (std::size_t conn = 0; conn < result.total_connections; ++conn) {
-            if (conn > 0) json << ",";
-            json << "\n    {\"from_cell\":" << conn
-                 << ",\"to_cell\":" << (conn + 1) << "}";
+        // 序列化真实 route 控制折线；仅输出 from/to cell 会让连接图
+        // 退化成“只有 cell、没有连接线”的空图。
+        bool first_connection = true;
+        for (std::size_t component_index = 0;
+             component_index < result.component_plans.size();
+             ++component_index) {
+            const auto& component = result.component_plans[component_index];
+            const auto& route = component.route;
+            const std::size_t group_count = route.sizeVectorSwaths();
+            const std::size_t connection_count = route.sizeConnections();
+            for (std::size_t group_index = 1;
+                 group_index < group_count && group_index < connection_count;
+                 ++group_index) {
+                const auto& previous_swaths =
+                    route.getSwaths(group_index - 1);
+                const auto& next_swaths = route.getSwaths(group_index);
+                if (previous_swaths.size() == 0 || next_swaths.size() == 0) {
+                    continue;
+                }
+
+                const auto& from_point =
+                    previous_swaths.at(previous_swaths.size() - 1).endPoint();
+                const auto& to_point = next_swaths.at(0).startPoint();
+                const auto& connection = route.getConnection(group_index);
+
+                if (!first_connection) json << ",";
+                first_connection = false;
+                json << "\n    {\"from_cell\":" << (group_index - 1)
+                     << ",\"to_cell\":" << group_index
+                     << ",\"component\":" << component_index
+                     << ",\"source\":\"route_waypoints\",\"path\":[["
+                     << from_point.getX() << "," << from_point.getY() << "]";
+                for (size_t point_index = 0;
+                     point_index < connection.size(); ++point_index) {
+                    const auto& point = connection.getGeometry(point_index);
+                    json << ",[" << point.getX() << "," << point.getY() << "]";
+                }
+                json << ",[" << to_point.getX() << "," << to_point.getY()
+                     << "]]";
+                json << "}";
+            }
         }
-        if (result.total_connections > 0) json << "\n  ";
+        if (!first_connection) json << "\n  ";
         json << "],\n  \"cspace\": {"
              << "\"valid\":"
              << (result.traversability.analysis_valid ? "true" : "false")
@@ -2179,16 +2215,14 @@ private:
                 const auto& component =
                     result.component_plans[component_index];
                 std::vector<f2c::types::LinearRing> eval_hole_rings;
-                for (std::size_t cell_index = 0;
-                     cell_index < component.coverage_target.size();
-                     ++cell_index) {
-                    const auto& target_cell =
-                        component.coverage_target.getGeometry(cell_index);
-                    for (std::size_t hole = 0;
-                         hole + 1 < target_cell.size(); ++hole) {
-                        eval_hole_rings.push_back(
-                            target_cell.getInteriorRing(hole));
-                    }
+                // C-space coverage_target may be split into hole-free cells.
+                // Keep the original center-space obstacle rings for gap
+                // reachability classification; otherwise shelf gaps silently
+                // disappear from the denominator correction input.
+                for (std::size_t hole = 0;
+                     hole + 1 < component.planning_polygon.size(); ++hole) {
+                    eval_hole_rings.push_back(
+                        component.planning_polygon.getInteriorRing(hole));
                 }
 
                 f2c::types::Swaths eval_swaths;

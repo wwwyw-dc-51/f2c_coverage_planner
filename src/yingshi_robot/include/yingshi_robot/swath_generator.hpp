@@ -1,5 +1,6 @@
 #pragma once
 #include <fields2cover.h>
+#include <cstddef>
 #include <vector>
 #include "yingshi_robot/planner_params.hpp"
 
@@ -29,6 +30,12 @@ f2c::types::Swath adjustSwathEndpoints(
 f2c::types::SwathsByCells adjustSwathsEndpoints(
     const f2c::types::SwathsByCells& swaths_by_cells,
     double distance);
+
+// 切割横穿孔洞的 swath，避免将禁行区带入路线规划；返回被切割的原始 swath 数。
+size_t clipSwathsCrossingHoles(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double min_swath_length);
 
 // 计算多边形最长边的方向角（委托给 decomposer 模块的 computeCellMainDirection）
 double computePolygonMainDirection(const f2c::types::Cell& cell);

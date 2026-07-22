@@ -61,7 +61,17 @@ f2c::types::LinearRing normalizeRing(
         const bool should_reverse =
             (counter_clockwise && area < 0.0) ||
             (!counter_clockwise && area > 0.0);
-        if (should_reverse) std::reverse(points.begin(), points.end());
+        if (should_reverse) {
+            // 不用 std::reverse — f2c::types::Point 的 move assignment 在某些
+            // F2C 版本中存在 bug（swap 时访问空 this → segfault）。
+            // 通过反向拷贝 + vector move 绕过 Point 的 operator=(&&)。
+            std::vector<f2c::types::Point> reversed;
+            reversed.reserve(points.size());
+            for (auto it = points.rbegin(); it != points.rend(); ++it) {
+                reversed.push_back(*it);
+            }
+            points = std::move(reversed);
+        }
     }
 
     f2c::types::LinearRing normalized;
@@ -79,7 +89,8 @@ f2c::types::Cell normalizeCell(
 
     const auto exterior = normalizeRing(
         cell.getExteriorRing(), true, snap_tolerance);
-    if (exterior.size() >= 4) normalized.addRing(exterior);
+    if (exterior.size() < 4) return normalized;
+    normalized.addRing(exterior);
 
     for (std::size_t i = 0; i + 1 < cell.size(); ++i) {
         const auto interior = normalizeRing(
