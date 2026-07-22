@@ -38,22 +38,36 @@ f2c::types::Cells rectilinearDecompose(
     };
 
     if (params.use_sweep) {
-        // Sweep 扫描线分解：仅用孔洞顶点 Y 做水平切割线
-        // X 压缩为 min/max（全宽条带），不做垂直切割
+        // Sweep 扫描线分解：以孔洞顶点 Y 做水平切割线，孔洞 X 边界做垂直切割线
+        // 形成对齐孔洞包围盒的网格，避免全宽条带被 difference 碎片化为孤立小块
         collect_y(work_area.getExteriorRing());
         for (size_t ri = 0; ri + 1 < work_area.size(); ++ri) {
             collect_y(work_area.getInteriorRing(ri));
         }
-        // X 只保留外边界 min/max，不收集孔洞顶点（回退双向切割）
+        // X 保留外边界 min/max
         for (size_t i = 0; i + 1 < work_area.getExteriorRing().size(); ++i) {
             xs.push_back(work_area.getExteriorRing().getGeometry(i).getX());
         }
-        // 压缩为 min/max（全宽条带）
         auto [xmin_it, xmax_it] = std::minmax_element(xs.begin(), xs.end());
         double x_min = *xmin_it, x_max = *xmax_it;
         xs.clear();
         xs.push_back(x_min);
         xs.push_back(x_max);
+        // 收集孔洞 X 边界（minX, maxX），使网格列对齐孔洞
+        // 密集孔洞场景下避免全宽条带跨多列被切碎后无法合并
+        for (size_t ri = 0; ri + 1 < work_area.size(); ++ri) {
+            const auto& hr = work_area.getInteriorRing(ri);
+            double hx_min = 1e9, hx_max = -1e9;
+            for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
+                double hx = hr.getGeometry(vi).getX();
+                if (hx < hx_min) hx_min = hx;
+                if (hx > hx_max) hx_max = hx;
+            }
+            if (hx_min < hx_max) {
+                xs.push_back(hx_min);
+                xs.push_back(hx_max);
+            }
+        }
     } else {
         collect_xy(work_area.getExteriorRing());
         for (size_t ri = 0; ri + 1 < work_area.size(); ++ri)
@@ -75,8 +89,8 @@ f2c::types::Cells rectilinearDecompose(
         return fallback;
     }
 
-    // Sweep 模式：X 压缩为 min/max 全宽条带，Y 用孔洞顶点做水平切割线
-    // 非 sweep 模式（else 分支）：保留所有顶点 X/Y 做双向切割
+    // Sweep 模式：X=外边界+孔洞边界, Y=外环顶点+孔洞顶点，形成对齐孔洞的网格
+    // 非 sweep 模式（else 分支）：保留所有顶点 X/Y 做全量双向切割
 
     if (xs.size() < 2) {
         f2c::types::Cells fallback;
