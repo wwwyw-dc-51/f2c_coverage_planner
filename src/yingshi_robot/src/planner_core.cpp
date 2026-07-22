@@ -280,6 +280,13 @@ PlanningComponentResult planSingleComponent(
             no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
         }
 
+        // 方案 1：保守垂直兜底合并
+        // 方案 2 的有洞条带子矩形拆分可能产生新的同 X 跨度相邻 cell，
+        // 再跑一次垂直合并作为安全收尾
+        if (req.use_sweep_decomp && no_hl.size() > 1) {
+            no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
+        }
+
         if (req.filter_tiny_cells) {
             const double min_cell_area =
                 req.min_cell_area_ratio * req.coverage_width * req.robot_width;

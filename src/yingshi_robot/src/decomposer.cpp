@@ -107,18 +107,66 @@ f2c::types::Cells rectilinearDecompose(
             for (size_t ci = 0; ci < intersected.size(); ++ci) {
                 f2c::types::Cell cell = intersected.getGeometry(ci);
                 if (cell.size() > 1) {
-                    f2c::types::Cells single;
-                    single.addGeometry(cell);
+                    // 方案 2：有洞条带沿孔洞 X 边界拆成子矩形，避免 difference 碎片化
+                    // 收集该 cell 内所有孔洞的 X 边界
+                    std::vector<double> hole_x_bounds;
+                    hole_x_bounds.push_back(x0);
+                    hole_x_bounds.push_back(x1);
                     for (size_t hi = 0; hi + 1 < cell.size(); ++hi) {
-                        f2c::types::Cell hole_cell;
-                        hole_cell.addRing(cell.getInteriorRing(hi));
-                        f2c::types::Cells hole_cells;
-                        hole_cells.addGeometry(hole_cell);
-                        hole_cells = hole_cells.buffer(0.001);
-                        single = single.difference(hole_cells);
+                        const auto& hr = cell.getInteriorRing(hi);
+                        double hx_min = 1e9, hx_max = -1e9;
+                        for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
+                            double hx = hr.getGeometry(vi).getX();
+                            if (hx < hx_min) hx_min = hx;
+                            if (hx > hx_max) hx_max = hx;
+                        }
+                        if (hx_min < hx_max) {
+                            hole_x_bounds.push_back(hx_min);
+                            hole_x_bounds.push_back(hx_max);
+                        }
                     }
-                    for (size_t si = 0; si < single.size(); ++si)
-                        result.addGeometry(single.getGeometry(si));
+                    std::sort(hole_x_bounds.begin(), hole_x_bounds.end());
+                    hole_x_bounds.erase(
+                        std::unique(hole_x_bounds.begin(), hole_x_bounds.end(),
+                            [](double a, double b) { return std::abs(a-b) < 1e-6; }),
+                        hole_x_bounds.end());
+
+                    // 在孔洞 X 边界之间创建子矩形，逐个与多边形求交
+                    for (size_t xi = 0; xi + 1 < hole_x_bounds.size(); ++xi) {
+                        double sx0 = hole_x_bounds[xi], sx1 = hole_x_bounds[xi+1];
+                        if (sx1 - sx0 < 0.01) continue;
+                        f2c::types::LinearRing sub_ring;
+                        sub_ring.addPoint(f2c::types::Point(sx0, y0));
+                        sub_ring.addPoint(f2c::types::Point(sx1, y0));
+                        sub_ring.addPoint(f2c::types::Point(sx1, y1));
+                        sub_ring.addPoint(f2c::types::Point(sx0, y1));
+                        sub_ring.addPoint(f2c::types::Point(sx0, y0));
+                        f2c::types::Cell sub_cell;
+                        sub_cell.addRing(sub_ring);
+                        auto sub_intersected = f2c::types::Cells::intersection(
+                            sub_cell, work_area);
+                        for (size_t sci = 0; sci < sub_intersected.size(); ++sci) {
+                            auto sc = sub_intersected.getGeometry(sci);
+                            if (sc.area() < 0.01) continue;
+                            // 子矩形对齐孔洞边界，通常无洞；若仍有洞则回退 difference
+                            if (sc.size() > 1) {
+                                f2c::types::Cells fallback;
+                                fallback.addGeometry(sc);
+                                for (size_t fhi = 0; fhi + 1 < sc.size(); ++fhi) {
+                                    f2c::types::Cell fh;
+                                    fh.addRing(sc.getInteriorRing(fhi));
+                                    f2c::types::Cells fhc;
+                                    fhc.addGeometry(fh);
+                                    fhc = fhc.buffer(0.001);
+                                    fallback = fallback.difference(fhc);
+                                }
+                                for (size_t fi = 0; fi < fallback.size(); ++fi)
+                                    result.addGeometry(fallback.getGeometry(fi));
+                            } else {
+                                result.addGeometry(sc);
+                            }
+                        }
+                    }
                 } else {
                     result.addGeometry(cell);
                 }
