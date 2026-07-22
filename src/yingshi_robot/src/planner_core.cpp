@@ -280,19 +280,6 @@ PlanningComponentResult planSingleComponent(
             no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
         }
 
-        // 第三轮：保守兜底合并
-        // 垂直合并后 cell 变高，可能与相邻列产生新的同向合并机会。
-        // 交错跑一次 H-merge + V-merge 作为收尾，捕获遗漏的碎片。
-        if (req.use_sweep_decomp && no_hl.size() > 1) {
-            const double merge_angle_threshold = 60.0;
-            no_hl = mergeCellsWithSimilarDirection(
-                no_hl, req.polygon, req.coverage_width,
-                merge_angle_threshold, req.use_sweep_decomp).cells;
-        }
-        if (req.use_sweep_decomp && no_hl.size() > 1) {
-            no_hl = mergeAdjacentSweepStrips(no_hl, req.coverage_width);
-        }
-
         if (req.filter_tiny_cells) {
             const double min_cell_area =
                 req.min_cell_area_ratio * req.coverage_width * req.robot_width;
