@@ -53,19 +53,44 @@ f2c::types::Cells rectilinearDecompose(
         xs.clear();
         xs.push_back(x_min);
         xs.push_back(x_max);
-        // 收集孔洞 X 边界（minX, maxX），使网格列对齐孔洞
-        // 密集孔洞场景下避免全宽条带跨多列被切碎后无法合并
-        for (size_t ri = 0; ri + 1 < work_area.size(); ++ri) {
-            const auto& hr = work_area.getInteriorRing(ri);
-            double hx_min = 1e9, hx_max = -1e9;
-            for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
-                double hx = hr.getGeometry(vi).getX();
-                if (hx < hx_min) hx_min = hx;
-                if (hx > hx_max) hx_max = hx;
+        // 收集孔洞 bbox，判定是否启用 X 边界切割
+        // 条件：存在 Y 重叠但 X 不重叠的孔洞对 → 同一"货架行"多列
+        // 仅在密集列孔洞场景下加 X 切割，避免稀疏/不规则孔洞场景退化
+        if (work_area.size() > 1) {
+            struct HoleBBox { double xmin, xmax, ymin, ymax; };
+            std::vector<HoleBBox> hole_bboxes;
+            for (size_t ri = 0; ri + 1 < work_area.size(); ++ri) {
+                const auto& hr = work_area.getInteriorRing(ri);
+                double hx_min = 1e9, hx_max = -1e9, hy_min = 1e9, hy_max = -1e9;
+                for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
+                    double hx = hr.getGeometry(vi).getX();
+                    double hy = hr.getGeometry(vi).getY();
+                    if (hx < hx_min) hx_min = hx;
+                    if (hx > hx_max) hx_max = hx;
+                    if (hy < hy_min) hy_min = hy;
+                    if (hy > hy_max) hy_max = hy;
+                }
+                if (hx_min < hx_max && hy_min < hy_max)
+                    hole_bboxes.push_back({hx_min, hx_max, hy_min, hy_max});
             }
-            if (hx_min < hx_max) {
-                xs.push_back(hx_min);
-                xs.push_back(hx_max);
+            bool has_dense_columns = false;
+            for (size_t i = 0; i < hole_bboxes.size() && !has_dense_columns; ++i) {
+                for (size_t j = i + 1; j < hole_bboxes.size(); ++j) {
+                    bool y_overlap = hole_bboxes[i].ymax > hole_bboxes[j].ymin &&
+                                     hole_bboxes[j].ymax > hole_bboxes[i].ymin;
+                    bool x_separated = hole_bboxes[i].xmax < hole_bboxes[j].xmin ||
+                                       hole_bboxes[j].xmax < hole_bboxes[i].xmin;
+                    if (y_overlap && x_separated) {
+                        has_dense_columns = true;
+                        break;
+                    }
+                }
+            }
+            if (has_dense_columns) {
+                for (const auto& hb : hole_bboxes) {
+                    xs.push_back(hb.xmin);
+                    xs.push_back(hb.xmax);
+                }
             }
         }
     } else {
