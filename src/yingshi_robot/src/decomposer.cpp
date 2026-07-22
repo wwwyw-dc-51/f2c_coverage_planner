@@ -600,6 +600,14 @@ f2c::types::Cells mergeAdjacentSweepStrips(
             result.addGeometry(group_cells.getGeometry(0));
         } else {
             auto merged = group_cells.unionCascaded();
+            // 拓扑运算失败时保留原始 cell，不能静默丢弃作业区
+            if (merged.size() == 0) {
+                for (size_t i = 0; i < n; ++i) {
+                    if (group_id[find(i)] == g)
+                        result.addGeometry(cells.getGeometry(i));
+                }
+                continue;
+            }
             bool has_interior = false;
             for (size_t mi = 0; mi < merged.size() && !has_interior; ++mi) {
                 if (merged.getGeometry(mi).size() > 1)
