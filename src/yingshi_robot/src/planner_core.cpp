@@ -171,8 +171,8 @@ double holeRepairClearance(
         physicalFootprintClearanceRadius(req.physical_footprint));
 }
 
-// ── Snake 模式直连路由 ──
-f2c::types::Route buildSnakeRoute(
+// Cell-block 级直连路由：保持贪心排好的 Cell 顺序，只在 Cell 接缝处连接。
+f2c::types::Route buildCellBlockRoute(
     const f2c::types::SwathsByCells& swaths_by_cells,
     const f2c::types::Cells& mid_hl)
 {
@@ -426,8 +426,6 @@ PlanningComponentResult planSingleComponent(
         // ── 4. 去重接缝补线 ──
         pruneRedundantCellSeamFills(
             swaths_by_cells, no_hl, req.polygon, req.coverage_width);
-        mergeCollinearSwathsAcrossCells(
-            swaths_by_cells, req.polygon, req.coverage_width);
 
         if (!req.holes.empty()) {
             clipSwathsCrossingHoles(
@@ -444,14 +442,13 @@ PlanningComponentResult planSingleComponent(
             cell_order.push_back(i);
 
         if (req.swath_order_type != "none") {
-            greedyCellOrder(swaths_by_cells, cell_order, req.holes,
-                            req.swath_order_type);
+            greedyCellOrder(swaths_by_cells, cell_order, req.holes);
         }
 
-        // ── 7. 构建 Route ──
+        // ── 7. 构建 Route：贪心模式保持 Cell-block；none 才使用 F2C TSP 基线 ──
         f2c::types::Route route;
-        if (req.swath_order_type == "snake") {
-            route = buildSnakeRoute(swaths_by_cells, mid_hl);
+        if (req.swath_order_type != "none") {
+            route = buildCellBlockRoute(swaths_by_cells, mid_hl);
         } else {
             f2c::rp::RoutePlannerBase route_planner;
             route = route_planner.genRoute(mid_hl, swaths_by_cells);

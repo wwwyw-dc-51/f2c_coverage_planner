@@ -54,14 +54,6 @@ size_t pruneRedundantCellSeamFills(
     double cov_width,
     double gap_tolerance_ratio = 0.05);
 
-// 合并跨 Cell 的同方向共线 Swath 片段。
-// 只有当片段投影相接、连接线全程位于规划自由空间内时才合并；
-// 跨越孔洞或真实缺口的片段保持独立。返回实际移除的片段数。
-size_t mergeCollinearSwathsAcrossCells(
-    f2c::types::SwathsByCells& swaths_by_cells,
-    const f2c::types::Cell& full_polygon,
-    double coverage_width);
-
 // ========== 孔洞检测工具 ==========
 
 // 从顶点构造闭合环；若输入未重复首点，则自动补上。

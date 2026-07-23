@@ -50,7 +50,7 @@ struct PlanningRequest {
     std::vector<double> swath_angle_candidates;
 
     // ── 排序参数 ──
-    std::string swath_order_type = "boustrophedon";   // boustrophedon | snake | spiral | none
+    std::string swath_order_type = "boustrophedon";   // 非 none：v9.1 Cell 贪心；none：F2C TSP 基线
     std::string turn_planner_type = "direct";          // direct | dubins | reeds_shepp
 
     // ── 路径后处理 ──
@@ -148,8 +148,8 @@ struct PlanningResult {
 //   - swath_angle_optimization（多角度候选，选 swath 数最少）
 //   - tiny-cell 过滤 + 相邻同向 Cell 合并（与 legacy 共用实现）
 //   - pruneRedundantCellSeamFills
-//   - greedyCellOrder / Snake 路由
-//   - genRoute（Boustrophedon TSP）+ Snake 直连
+//   - greedyCellOrder（v9.1 出口驱动）+ Cell-block 直连
+//   - genRoute（仅 swath_order_type=none 时作为 TSP 基线）
 //   - repairRouteConnectionsAroundHoles + synchronizeRouteConnectionEndpoints
 //   - turn_planner_type：dubins / dubins_cc / reeds_shepp / direct
 //   - RDP 路径简化 + materializePath

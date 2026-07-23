@@ -57,17 +57,23 @@ f2c::types::Path simplifyPath(
     double epsilon,
     double turn_angle_threshold);
 
-// 贪心 Cell 排序：根据上游出口动态决定 Cell 顺序和 Cell 内入口变体。
-// 保留 F2C 排序器生成的规则覆盖顺序；有孔洞时以极角 Cell 顺序为
-// 安全骨架，并用动态规划联合优化全部入口变体；无孔洞时联合选择
-// 最近 Cell 与其四种合法入口变体。
-// hole_rings: 孔洞环（用于穿洞检测，空则跳过）
-// swath_order_type: "boustrophedon"（默认）| "snake" | "spiral"
+// v9.1 纯出口驱动贪心：根据当前 Cell 出口同时决定下一个 Cell、
+// 入口方向和 Cell 内部方向；有孔洞与无孔洞使用同一套逻辑。
+// hole_rings: 孔洞环（用于连接穿洞检测，空则跳过）
 // cell_order: [out] 遍历顺序 → 原始 no_hl 索引
 void greedyCellOrder(
     f2c::types::SwathsByCells& swaths_by_cells,
     std::vector<size_t>& cell_order,
+    const std::vector<f2c::types::LinearRing>& hole_rings);
+
+// 兼容旧节点调用；排序策略参数不再参与决策，统一转发到 v9.1 贪心。
+inline void greedyCellOrder(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    std::vector<size_t>& cell_order,
     const std::vector<f2c::types::LinearRing>& hole_rings,
-    const std::string& swath_order_type = "boustrophedon");
+    const std::string&)
+{
+    greedyCellOrder(swaths_by_cells, cell_order, hole_rings);
+}
 
 }  // namespace yingshi

@@ -8,7 +8,6 @@
 #include "yingshi_robot/path_planner.hpp"
 #include "yingshi_robot/boundary_filler.hpp"  // segmentCrossesHole, pointInAnyHole
 #include <algorithm>
-#include <cstdint>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -720,15 +719,13 @@ f2c::types::Path simplifyPath(
     }
     return result;
 }
-
-// ========== 贪心 Cell 排序（链式递推） ==========
-// 保留 F2C 原生排序，只在四种合法入口变体中优化连接代价；有孔洞时
-// 对固定极角顺序做全链动态规划，无孔洞时做 Cell/入口联合贪心。
+// v9.1 纯出口驱动贪心：Cell 顺序、入口方向、Cell 内部方向联合决定。
+// 从 C0 的出口出发，每次比较所有未访问 Cell 的 normal/reverse 入口，
+// 连接穿洞时增加惩罚；选中后立即更新当前出口并继续。
 void greedyCellOrder(
     f2c::types::SwathsByCells& swaths_by_cells,
     std::vector<size_t>& cell_order,
-    const std::vector<f2c::types::LinearRing>& hole_rings,
-    const std::string& swath_order_type)
+    const std::vector<f2c::types::LinearRing>& hole_rings)
 {
     const size_t n_cells = swaths_by_cells.size();
 
@@ -736,274 +733,128 @@ void greedyCellOrder(
     cell_order.resize(n_cells);
     for (size_t i = 0; i < n_cells; ++i) cell_order[i] = i;
 
-    if (n_cells == 0) return;
+    // 单 cell 无需排序
+    if (n_cells <= 1) return;
 
-    std::vector<bool> ids_normalized(n_cells, false);
-
-    // F2C 依据 Swath ID 排序。补线在生成阶段已明确放在 Cell 的首/尾，
-    // 因此先按当前顺序重新编号，不能让默认 ID=0 的补线跳回中间。
-    const auto normalizeIds = [&](size_t ci) {
-        if (ids_normalized[ci]) return;
-        ids_normalized[ci] = true;
-        auto& cell = swaths_by_cells[ci];
-        for (size_t i = 0; i < cell.size(); ++i) {
-            cell.at(i).setId(static_cast<int>(i));
-        }
-    };
-
-    const auto sortedVariant = [&](size_t ci, uint32_t variant) {
-        normalizeIds(ci);
-        const auto& cell = swaths_by_cells[ci];
-        if (swath_order_type == "snake") {
-            f2c::rp::SnakeOrder sorter;
-            return sorter.genSortedSwaths(cell, variant);
-        }
-        if (swath_order_type == "spiral") {
-            f2c::rp::SpiralOrder sorter(6);
-            return sorter.genSortedSwaths(cell, variant);
-        }
-        f2c::rp::BoustrophedonOrder sorter;
-        return sorter.genSortedSwaths(cell, variant);
-    };
-
-    const auto connectionCost = [&](double from_x, double from_y,
-                                    const f2c::types::Point& target) {
-        double cost = std::hypot(
-            from_x - target.getX(), from_y - target.getY());
-        if (segmentCrossesHole(
-                from_x, from_y, target.getX(), target.getY(),
-                hole_rings, 20)) {
-            cost += 1e9;  // 硬约束：视穿洞连接为不可行
-        }
-        return cost;
-    };
-
-    struct CellChoice {
-        size_t cell_index {0};
-        double cost {std::numeric_limits<double>::max()};
-        f2c::types::Swaths swaths;
-    };
-
-    const auto chooseVariant = [&](size_t ci, double entry_x, double entry_y) {
-        CellChoice best;
-        best.cell_index = ci;
-        normalizeIds(ci);
-        if (swaths_by_cells[ci].size() == 0) return best;
-
-        for (uint32_t variant = 0; variant < 4; ++variant) {
-            auto candidate = sortedVariant(ci, variant);
-            const double cost = connectionCost(
-                entry_x, entry_y, candidate.at(0).startPoint());
-            if (cost < best.cost) {
-                best.cost = cost;
-                best.swaths = std::move(candidate);
-            }
-        }
-        return best;
-    };
-
-    if (n_cells == 1) {
-        // C0 没有上游出口，固定使用 variant 0 作为稳定起点。
-        swaths_by_cells[0] = sortedVariant(0, 0);
+    // 孔洞裁剪或接缝去重可能留下空 Cell；从第一个非空 Cell 启动，
+    // 避免把空组当作出口解引用，同时保持原始索引映射。
+    size_t start_ci = 0;
+    while (start_ci < n_cells && swaths_by_cells[start_ci].size() == 0) {
+        ++start_ci;
+    }
+    if (start_ci == n_cells) {
+        swaths_by_cells = f2c::types::SwathsByCells();
+        cell_order.clear();
         return;
     }
-
-    // ── 有孔洞时：圆形绕洞排序作为遍历序基础 ──
-    // 贪心纯端点距离在孔洞场景下可能产生跨洞连接，
-    // 圆形排序天然形成绕洞环，贪心在此基础上决定反转方向。
-    std::vector<size_t> traversal_order;
-    if (!hole_rings.empty()) {
-        // 计算孔洞中心
-        double h_cx = 0, h_cy = 0;
-        size_t h_n = 0;
-        for (const auto& hr : hole_rings) {
-            for (size_t vi = 0; vi + 1 < hr.size(); ++vi) {
-                h_cx += hr.getGeometry(vi).getX();
-                h_cy += hr.getGeometry(vi).getY();
-                ++h_n;
-            }
-        }
-        if (h_n > 0) { h_cx /= h_n; h_cy /= h_n; }
-
-        // 计算每个 cell 质心绕孔洞中心的极角
-        std::vector<std::pair<double, size_t>> cell_angles;
-        for (size_t ci = 0; ci < n_cells; ++ci) {
-            double sx = 0, sy = 0;
-            const auto& cell = swaths_by_cells[ci];
-            size_t sn = 0;
-            for (size_t j = 0; j < cell.size(); ++j) {
-                sx += (cell.at(j).startPoint().getX() + cell.at(j).endPoint().getX()) * 0.5;
-                sy += (cell.at(j).startPoint().getY() + cell.at(j).endPoint().getY()) * 0.5;
-                ++sn;
-            }
-            double ang = (sn > 0) ? std::atan2(sy/sn - h_cy, sx/sn - h_cx) : 0.0;
-            cell_angles.push_back({ang, ci});
-        }
-        std::sort(cell_angles.begin(), cell_angles.end());
-
-        // 找到 C0 在排序后的位置，从 C0 开始
-        size_t c0_pos = 0;
-        for (size_t i = 0; i < cell_angles.size(); ++i) {
-            if (cell_angles[i].second == 0) { c0_pos = i; break; }
-        }
-        for (size_t i = 0; i < n_cells; ++i) {
-            traversal_order.push_back(cell_angles[(c0_pos + i) % n_cells].second);
-        }
-    } else {
-        // 无孔洞：用恒等序（后续贪心会动态选择）
-        for (size_t i = 0; i < n_cells; ++i) traversal_order.push_back(i);
-    }
-
-    if (!hole_rings.empty()) {
-        // Cell 极角顺序固定时，逐 Cell 只看入口会把坏出口留给下一 Cell。
-        // 对每个 Cell 的 4 种合法入口变体做动态规划，最小化整条链的
-        // 跨 Cell 连接代价。C0 保持 variant 0，确保起点稳定。
-        constexpr size_t kVariantCount = 4;
-        const double infinity = std::numeric_limits<double>::max();
-        std::vector<std::vector<f2c::types::Swaths>> variants(n_cells);
-        for (size_t ci = 0; ci < n_cells; ++ci) {
-            variants[ci].reserve(kVariantCount);
-            for (uint32_t variant = 0; variant < kVariantCount; ++variant) {
-                variants[ci].push_back(sortedVariant(ci, variant));
-            }
-        }
-
-        std::vector<std::vector<double>> costs(
-            n_cells, std::vector<double>(kVariantCount, infinity));
-        std::vector<std::vector<int>> parents(
-            n_cells, std::vector<int>(kVariantCount, -1));
-        costs[0][0] = 0.0;
-
-        for (size_t order_pos = 1; order_pos < n_cells; ++order_pos) {
-            const size_t previous_ci = traversal_order[order_pos - 1];
-            const size_t current_ci = traversal_order[order_pos];
-            for (size_t current_variant = 0;
-                 current_variant < kVariantCount; ++current_variant) {
-                const auto& current = variants[current_ci][current_variant];
-                if (current.size() == 0) continue;
-                for (size_t previous_variant = 0;
-                     previous_variant < kVariantCount; ++previous_variant) {
-                    if (costs[order_pos - 1][previous_variant] >=
-                        infinity * 0.5) {
-                        continue;
-                    }
-                    const auto& previous =
-                        variants[previous_ci][previous_variant];
-                    if (previous.size() == 0) continue;
-                    const auto& previous_exit =
-                        previous.at(previous.size() - 1).endPoint();
-                    const double candidate_cost =
-                        costs[order_pos - 1][previous_variant] +
-                        connectionCost(
-                            previous_exit.getX(), previous_exit.getY(),
-                            current.at(0).startPoint());
-                    if (candidate_cost < costs[order_pos][current_variant]) {
-                        costs[order_pos][current_variant] = candidate_cost;
-                        parents[order_pos][current_variant] =
-                            static_cast<int>(previous_variant);
-                    }
-                }
-            }
-        }
-
-        size_t selected_variant = 0;
-        for (size_t variant = 1; variant < kVariantCount; ++variant) {
-            if (costs[n_cells - 1][variant] <
-                costs[n_cells - 1][selected_variant]) {
-                selected_variant = variant;
-            }
-        }
-        if (costs[n_cells - 1][selected_variant] < infinity * 0.5) {
-            std::vector<size_t> selected_variants(n_cells, 0);
-            selected_variants[n_cells - 1] = selected_variant;
-            for (size_t order_pos = n_cells - 1; order_pos > 0; --order_pos) {
-                const int parent = parents[order_pos][selected_variant];
-                if (parent < 0) break;
-                selected_variant = static_cast<size_t>(parent);
-                selected_variants[order_pos - 1] = selected_variant;
-            }
-
-            f2c::types::SwathsByCells optimized;
-            for (size_t order_pos = 0; order_pos < n_cells; ++order_pos) {
-                const size_t ci = traversal_order[order_pos];
-                optimized.push_back(
-                    variants[ci][selected_variants[order_pos]]);
-            }
-            swaths_by_cells = optimized;
-            cell_order = traversal_order;
-            return;
-        }
-    }
-
-    // 无孔洞路径从固定的 C0 variant 0 开始，再联合选择 Cell 与入口变体。
-    swaths_by_cells[0] = sortedVariant(0, 0);
 
     std::vector<bool> visited(n_cells, false);
     f2c::types::SwathsByCells result;
     std::vector<size_t> new_order;
 
-    // 从 C0 出发
-    visited[0] = true;
-    result.push_back(swaths_by_cells[0]);
-    new_order.push_back(0);
+    // 从第一个非空 Cell 出发；正常场景下它就是 C0。
+    visited[start_ci] = true;
+    result.push_back(swaths_by_cells[start_ci]);
+    new_order.push_back(start_ci);
 
-    // 当前出口 = C0 最后一条 swath 的终点
+    // 当前出口 = 起始 Cell 最后一条 swath 的终点
     double cur_x, cur_y;
     {
-        const auto& c0 = swaths_by_cells[0];
-        if (c0.size() == 0) {
-            // 防御性：C0 无 swath，从第一个非空 cell 取起点
-            cur_x = 0.0; cur_y = 0.0;
-            for (size_t fi = 1; fi < swaths_by_cells.size(); ++fi) {
-                if (swaths_by_cells[fi].size() > 0) {
-                    cur_x = swaths_by_cells[fi].at(0).startPoint().getX();
-                    cur_y = swaths_by_cells[fi].at(0).startPoint().getY();
-                    break;
-                }
-            }
-        } else {
-            const auto& last_sw = c0.at(c0.size() - 1);
-            cur_x = last_sw.endPoint().getX();
-            cur_y = last_sw.endPoint().getY();
-        }
+        const auto& c0 = swaths_by_cells[start_ci];
+        const auto& last_sw = c0.at(c0.size() - 1);
+        cur_x = last_sw.endPoint().getX();
+        cur_y = last_sw.endPoint().getY();
     }
 
-    // 主循环：有孔洞时保持极角 Cell 顺序；无孔洞时动态选择最近 Cell。
-    size_t order_idx = 1;  // C0 已访问，从 traversal_order[1] 开始
+    // 贪心主循环
     while (new_order.size() < n_cells) {
-        CellChoice choice;
+        double best_dist = std::numeric_limits<double>::max();
+        size_t best_ci = 0;
+        bool best_reverse = false;
 
-        if (!hole_rings.empty()) {
-            const size_t next_ci = traversal_order[order_idx++];
-            choice = chooseVariant(next_ci, cur_x, cur_y);
-        } else {
-            // Cell 次序与内部入口变体一起由上游真实出口决定。
-            for (size_t ci = 0; ci < n_cells; ++ci) {
-                if (visited[ci]) continue;
-                auto candidate = chooseVariant(ci, cur_x, cur_y);
-                if (candidate.cost < choice.cost) {
-                    choice = std::move(candidate);
-                }
+        for (size_t ci = 0; ci < n_cells; ++ci) {
+            if (visited[ci]) continue;
+            const auto& cell = swaths_by_cells[ci];
+            if (cell.size() == 0) continue;
+
+            const auto& first_sw = cell.at(0);
+            const auto& last_sw = cell.at(cell.size() - 1);
+
+            double fsx = first_sw.startPoint().getX();
+            double fsy = first_sw.startPoint().getY();
+            double lex = last_sw.endPoint().getX();
+            double ley = last_sw.endPoint().getY();
+
+            // 候选1: 正常方向 — cur → cell.first.start
+            double dist_normal = std::hypot(cur_x - fsx, cur_y - fsy);
+            if (!hole_rings.empty() &&
+                yingshi::segmentCrossesHole(
+                    cur_x, cur_y, fsx, fsy, hole_rings, 20)) {
+                dist_normal += 1000.0;  // 穿洞惩罚
+            }
+
+            // 候选2: 反转方向 — cur → cell.last.end
+            double dist_rev = std::hypot(cur_x - lex, cur_y - ley);
+            if (!hole_rings.empty() &&
+                yingshi::segmentCrossesHole(
+                    cur_x, cur_y, lex, ley, hole_rings, 20)) {
+                dist_rev += 1000.0;
+            }
+
+            if (dist_normal < best_dist) {
+                best_dist = dist_normal;
+                best_ci = ci;
+                best_reverse = false;
+            }
+            if (dist_rev < best_dist) {
+                best_dist = dist_rev;
+                best_ci = ci;
+                best_reverse = true;
             }
         }
 
-        if (choice.cost >= std::numeric_limits<double>::max() * 0.5) {
-            // 正常流程不会产生空 Cell；防御性退出避免解引用空 Swath。
-            break;
+        // 无有效候选（所有剩余 cell 均为空）→ 提前退出
+        if (best_dist >= std::numeric_limits<double>::max() * 0.5) break;
+
+        // 选中 best_ci，标记已访问
+        visited[best_ci] = true;
+        new_order.push_back(best_ci);
+
+        // 先计算出口坐标（在 move 之前，避免 use-after-move）
+        double next_x, next_y;
+        {
+            const auto& orig_cell = swaths_by_cells[best_ci];
+            if (best_reverse) {
+                // 出口 = 原 cell 第一个 swath 的起点（反转后最后一个 swath 的终点）
+                next_x = orig_cell.at(0).startPoint().getX();
+                next_y = orig_cell.at(0).startPoint().getY();
+            } else {
+                // 出口 = 最后一个 swath 的终点
+                const auto& last_sw = orig_cell.at(orig_cell.size() - 1);
+                next_x = last_sw.endPoint().getX();
+                next_y = last_sw.endPoint().getY();
+            }
         }
 
-        const size_t selected_ci = choice.cell_index;
-        visited[selected_ci] = true;
-        new_order.push_back(selected_ci);
-        swaths_by_cells[selected_ci] = std::move(choice.swaths);
+        auto selected_cell = std::move(swaths_by_cells[best_ci]);
 
-        const auto& selected_cell = swaths_by_cells[selected_ci];
-        if (selected_cell.size() > 0) {
-            const auto& last_swath = selected_cell.at(selected_cell.size() - 1);
-            cur_x = last_swath.endPoint().getX();
-            cur_y = last_swath.endPoint().getY();
+        if (best_reverse) {
+            // 反转整个 cell：倒序 swaths + 每条 swath 交换起终点
+            f2c::types::Swaths reversed;
+            for (size_t si = selected_cell.size(); si > 0; --si) {
+                const auto& sw = selected_cell.at(si - 1);
+                f2c::types::LineString rev_line;
+                rev_line.addPoint(sw.endPoint());
+                rev_line.addPoint(sw.startPoint());
+                f2c::types::Swath rev_sw(rev_line, sw.getWidth(), sw.getId(), sw.getType());
+                reversed.push_back(rev_sw);
+            }
+            selected_cell = reversed;
         }
-        result.push_back(selected_cell);
+
+        cur_x = next_x;
+        cur_y = next_y;
+        result.push_back(std::move(selected_cell));
     }
 
     swaths_by_cells = result;

@@ -251,14 +251,14 @@ TEST(CellOrder, PreservesBoundaryFillAtExplicitCellEnd)
     f2c::types::SwathsByCells cells {cell};
     std::vector<size_t> order;
 
-    yingshi::greedyCellOrder(cells, order, {}, "boustrophedon");
+    yingshi::greedyCellOrder(cells, order, {});
 
     ASSERT_EQ(cells.size(), 1U);
     ASSERT_EQ(cells.at(0).size(), cell.size());
     EXPECT_NEAR(swathMidY(cells.at(0).back()), 0.185, 1e-9);
 }
 
-TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryVariant)
+TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryDirection)
 {
     f2c::types::Swaths first_cell;
     first_cell.push_back(makeSwath(0.0, 0.0, 10.0, 0.0, 0.90, 0));
@@ -269,19 +269,19 @@ TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryVariant)
     f2c::types::SwathsByCells cells {first_cell, second_cell};
     std::vector<size_t> order;
 
-    yingshi::greedyCellOrder(cells, order, {}, "boustrophedon");
+    yingshi::greedyCellOrder(cells, order, {});
 
     ASSERT_EQ(cells.size(), 2U);
     ASSERT_EQ(cells.at(1).size(), 2U);
     EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 10.0, 1e-9);
-    EXPECT_NEAR(cells.at(1).at(0).startPoint().getY(), 1.0, 1e-9);
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getY(), 2.0, 1e-9);
     EXPECT_NEAR(
         cells.at(0).back().endPoint().distance(
             cells.at(1).at(0).startPoint()),
-        1.0, 1e-9);
+        2.0, 1e-9);
 }
 
-TEST(CellOrder, OptimizesHoleOrderedEntryVariantsAcrossTheWholeChain)
+TEST(CellOrder, UsesGreedyEntryDirectionWithHole)
 {
     f2c::types::Swaths first_cell;
     first_cell.push_back(makeSwath(0.0, 0.0, 4.0, 0.0, 0.90, 0));
@@ -304,18 +304,12 @@ TEST(CellOrder, OptimizesHoleOrderedEntryVariantsAcrossTheWholeChain)
         })
     };
 
-    yingshi::greedyCellOrder(cells, order, holes, "boustrophedon");
+    yingshi::greedyCellOrder(cells, order, holes);
 
     ASSERT_EQ(cells.size(), 3U);
     ASSERT_EQ(order, (std::vector<size_t> {0U, 1U, 2U}));
-    EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 10.0, 1e-9);
-
-    double connection_sum = 0.0;
-    for (size_t i = 1; i < cells.size(); ++i) {
-        connection_sum += cells.at(i - 1).back().endPoint().distance(
-            cells.at(i).at(0).startPoint());
-    }
-    EXPECT_LT(connection_sum, 8.0);
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 0.0, 1e-9);
+    EXPECT_NEAR(cells.at(1).back().endPoint().getX(), 10.0, 1e-9);
 }
 
 TEST(BoundaryFill, RemovesSeamFillWhenTwoSidesAlreadyCoverTheGap)
@@ -412,46 +406,6 @@ TEST(BoundaryFill, KeepsSeamFillWhenCommonCoverageMissesOneEndpoint)
     EXPECT_EQ(yingshi::pruneRedundantCellSeamFills(
         swaths_by_cells, cells, full_polygon, 0.90), 0U);
     EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
-}
-
-TEST(BoundaryFill, MergesSafeCollinearFragmentsAcrossCells)
-{
-    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
-
-    f2c::types::Swaths left;
-    left.push_back(makeSwath(0.15, 2.0, 5.0, 2.0, 0.90));
-    f2c::types::Swaths right;
-    right.push_back(makeSwath(5.0, 2.0, 9.85, 2.0, 0.90));
-    f2c::types::SwathsByCells swaths_by_cells {left, right};
-
-    EXPECT_EQ(yingshi::mergeCollinearSwathsAcrossCells(
-        swaths_by_cells, full_polygon, 0.90), 1U);
-    ASSERT_EQ(swaths_by_cells.at(0).size(), 1U);
-    EXPECT_EQ(swaths_by_cells.at(1).size(), 0U);
-    EXPECT_NEAR(
-        swaths_by_cells.at(0).at(0).startPoint().getX(), 0.15, 1e-9);
-    EXPECT_NEAR(
-        swaths_by_cells.at(0).at(0).endPoint().getX(), 9.85, 1e-9);
-}
-
-TEST(BoundaryFill, DoesNotMergeFragmentsAcrossAHole)
-{
-    auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
-    full_polygon.addRing(makeClosedRing({
-        f2c::types::Point(4.99, 1.0),
-        f2c::types::Point(5.01, 1.0),
-        f2c::types::Point(5.01, 3.0),
-        f2c::types::Point(4.99, 3.0)}));
-
-    f2c::types::Swaths left;
-    left.push_back(makeSwath(0.15, 2.0, 4.99, 2.0, 0.90));
-    f2c::types::Swaths right;
-    right.push_back(makeSwath(5.01, 2.0, 9.85, 2.0, 0.90));
-    f2c::types::SwathsByCells swaths_by_cells {left, right};
-
-    EXPECT_EQ(yingshi::mergeCollinearSwathsAcrossCells(
-        swaths_by_cells, full_polygon, 0.90), 0U);
-    EXPECT_EQ(swaths_by_cells.sizeTotal(), 2U);
 }
 
 TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
