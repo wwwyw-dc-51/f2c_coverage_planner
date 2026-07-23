@@ -3,6 +3,8 @@
 ## 项目概述
 ROS2 Humble + Fields2Cover 扫地机器人全覆盖路径规划。纯 C++ PlannerCore 管线。
 
+> **当前版本**: v10.0 十全十美 (2026-07-23) | **测试**: 21/21 GATE PASS
+
 ## 快速开始
 
 ```bash
