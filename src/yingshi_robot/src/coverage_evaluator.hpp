@@ -58,7 +58,13 @@ struct EvalResult {
     double net_area = 0.0;           ///< 目标区域净面积 (m²)
     double covered_area = 0.0;       ///< 已覆盖面积 (m²)
     double coverage_rate = 0.0;      ///< 覆盖率 (0~1)
-    bool coverage_pass = false;      ///< 覆盖率 ≥ 阈值？
+    bool coverage_pass = false;      ///< 有效覆盖率 ≥ 阈值？
+
+    // 覆盖率数据契约：rate 使用 [0, 1]，面积使用 m²。
+    // coverage_rate 保留为历史别名；新消费者应使用明确命名的字段。
+    double raw_coverage_rate = 0.0;       ///< 未扣除物理不可达空隙
+    double effective_coverage_rate = 0.0; ///< 扣除物理不可达空隙后
+    double reachable_uncovered_area = 0.0; ///< 可达但仍未覆盖的面积
 
     // ── 网格法渲染数据（避免 Python 重算） ──
     double grid_resolution = 0.0;    ///< 网格分辨率
@@ -662,7 +668,7 @@ inline EvalResult evaluatePlan(
         r.covered_area = covered_area;
         r.coverage_rate = rate;
     }
-    r.coverage_pass = (r.coverage_rate >= params.coverage_threshold);
+    // 先保留原始覆盖率供诊断；最终门禁在空隙分类后按有效覆盖率决定。
 
     // ── 空隙分类：区分物理不可达 vs 算法可改进 ──
     r.corrected_net_area = r.net_area;
@@ -697,6 +703,13 @@ inline EvalResult evaluatePlan(
             }
         }
     }
+
+    // 建立稳定的覆盖率契约，避免报告和批测脚本混淆原始/有效口径。
+    r.raw_coverage_rate = r.coverage_rate;
+    r.effective_coverage_rate = r.corrected_coverage_rate;
+    r.reachable_uncovered_area = std::max(
+        0.0, r.net_area * (1.0 - r.raw_coverage_rate) - r.unreachable_area);
+    r.coverage_pass = (r.effective_coverage_rate >= params.coverage_threshold);
 
     // ── 路径总长 ──
     r.total_distance = computeTotalDistance(path);
@@ -811,15 +824,25 @@ inline std::string formatEvalReport(const EvalResult& r, const char* scenario_na
     oss << "\n--- \u7b2c\u4e00\u5c42: \u8986\u76d6\u5b8c\u6574\u6027 ---\n";
     oss << "\u76ee\u6807\u51c0\u9762\u79ef: " << r.net_area << " m\u00b2\n";
     oss << "\u5df2\u8986\u76d6\u9762\u79ef: " << r.covered_area << " m\u00b2\n";
-    oss << std::setprecision(2) << "\u8986\u76d6\u7387: " << (r.coverage_rate*100) << "%  "
+    oss << std::setprecision(2) << "\u8986\u76d6\u7387: "
+        << (r.raw_coverage_rate*100) << "%\n";
+    oss << "\u539f\u59cb\u8986\u76d6\u7387: "
+        << (r.raw_coverage_rate*100) << "%\n";
+    oss << "\u6709\u6548\u8986\u76d6\u7387: "
+        << (r.effective_coverage_rate*100) << "%  "
         << (r.coverage_pass ? "[\u901a\u8fc7]" : "[\u4e0d\u5408\u683c]") << "\n";
     if (r.unreachable_gap_count > 0) {
         oss << "  (\u7269\u7406\u4e0d\u53ef\u8fbe\u7a7a\u9699: " << r.unreachable_gap_count << " \u5904, "
             << std::setprecision(3) << r.unreachable_area << " m\u00b2 \u5df2\u4ece\u5206\u6bcd\u6263\u9664)\n";
-        oss << std::setprecision(2) << "\u4fee\u6b63\u540e\u8986\u76d6\u7387: " << (r.corrected_coverage_rate*100) << "%\n";
     }
+    oss << std::setprecision(3) << "\u4e0d\u53ef\u8fbe\u9762\u79ef: "
+        << r.unreachable_area << " m\u00b2\n";
+    oss << "\u53ef\u8fbe\u672a\u8986\u76d6\u9762\u79ef: "
+        << r.reachable_uncovered_area << " m\u00b2\n";
+    oss << std::setprecision(2) << "\u4fee\u6b63\u540e\u8986\u76d6\u7387: "
+        << (r.effective_coverage_rate*100) << "%\n";
     oss << std::setprecision(3) << "\u672a\u8986\u76d6\u9762\u79ef: "
-        << (r.net_area*(1-r.coverage_rate)) << " m\u00b2\n";
+        << (r.net_area*(1-r.raw_coverage_rate)) << " m\u00b2\n";
     oss << "\n--- \u7b2c\u4e8c\u5c42: \u6548\u7387\u6307\u6807 ---\n";
     oss << "\u8def\u5f84\u603b\u957f: " << r.total_distance << " m\n";
     oss << "Swath \u603b\u957f: " << r.swath_total_dist << " m\n";

@@ -258,19 +258,26 @@ if eval_found:
 
     result = {
         'scenario': name,
-        'coverage_rate': extract(r'覆盖率[:\s]*([\d.]+)%', text),
+        # 覆盖率必须按标签读取，避免把“有效/修正后覆盖率”误当原始值。
+        'raw_coverage_rate': extract(r'原始覆盖率[:\s]*([\d.]+)%', text),
+        'effective_coverage_rate': extract(r'有效覆盖率[:\s]*([\d.]+)%', text),
+        'coverage_rate': extract(r'(?<![原始有效正后])覆盖率[:\s]*([\d.]+)%', text),
         'single_score': extract(r'综合得分[:\s]*([\d.]+)', text),
-        'uncovered_area': extract(r'未覆盖面积[:\s]*([\d.]+)', text),
+        'uncovered_area': extract(r'(?<!可达)未覆盖面积[:\s]*([\d.]+)', text),
+        'unreachable_area': extract(r'不可达面积[:\s]*([\d.]+)', text),
+        'reachable_uncovered_area': extract(r'可达未覆盖面积[:\s]*([\d.]+)', text),
         'total_distance': extract(r'路径总长[:\s]*([\d.]+)', text),
         'work_ratio': extract(r'有效工作比[:\s]*([\d.]+)%', text),
         # 用 $ 锚定行尾整数，排除评分行的 "转弯次数: 5.678/15"
         'turn_count': extract(r'^转弯次数:\s*(\d+)\s*$', text, int, re.MULTILINE),
         'overlap_rate': extract(r'重叠率[:\s]*([\d.]+)%', text),
         'planning_time_ms': extract(r'规划耗时[:\s]*([\d.]+)\s*ms', text),
-        'corrected_coverage_rate': extract(r'修正后覆盖率[:\s]*([\d.]+)%', text),
+        # 旧字段保留为有效覆盖率别名，兼容历史汇总工具。
+        'corrected_coverage_rate': extract(r'有效覆盖率[:\s]*([\d.]+)%', text),
         'unreachable_gap_count': extract(
             r'物理不可达空隙[:\s]*(\d+)', text, int),
     }
+    result['coverage_rate'] = result.get('raw_coverage_rate')
     m = re.findall(r'目标净面积[:\s]*(-?[\d.]+)', text)
     if m: result['net_area'] = float(m[-1])
 
@@ -305,9 +312,13 @@ component_evals = []
 component_count = cspace.get('component_count', 1)
 if eval_found and component_count > 1:
     component_patterns = {
-        'coverage_rate': r'覆盖率[:\s]*([\d.]+)%',
+        'raw_coverage_rate': r'原始覆盖率[:\s]*([\d.]+)%',
+        'effective_coverage_rate': r'有效覆盖率[:\s]*([\d.]+)%',
+        'coverage_rate': r'(?<![原始有效正后])覆盖率[:\s]*([\d.]+)%',
         'single_score': r'综合得分[:\s]*([\d.]+)',
-        'uncovered_area': r'未覆盖面积[:\s]*([\d.]+)',
+        'uncovered_area': r'(?<!可达)未覆盖面积[:\s]*([\d.]+)',
+        'unreachable_area': r'不可达面积[:\s]*([\d.]+)',
+        'reachable_uncovered_area': r'可达未覆盖面积[:\s]*([\d.]+)',
         'total_distance': r'路径总长[:\s]*([\d.]+)',
         'work_ratio': r'有效工作比[:\s]*([\d.]+)%',
         'turn_count': r'^转弯次数:\s*(\d+)\s*$',
@@ -328,6 +339,8 @@ if eval_found and component_count > 1:
                     int(values[component_index])
                     if metric_name == 'turn_count'
                     else float(values[component_index]))
+            component_eval['corrected_coverage_rate'] = component_eval[
+                'effective_coverage_rate']
             component_evals.append(component_eval)
         result = {}
 
@@ -358,7 +371,16 @@ if os.path.exists(vis_json):
     except Exception as e:
         print(f'  WARNING: native JSON read failed: {e}')
 
-print(f'  {name}: cov={cov:.2f}% score={score:.1f} path_pts={len(full_path)}')
+if component_evals:
+    cov = min(v.get('raw_coverage_rate', 0) or 0 for v in component_evals)
+    effective_cov = min(
+        v.get('effective_coverage_rate', 0) or 0
+        for v in component_evals)
+    score = min(v.get('single_score', 0) or 0 for v in component_evals)
+else:
+    effective_cov = result.get('effective_coverage_rate', cov) or 0
+print(f'  {name}: raw_cov={cov:.2f}% effective_cov={effective_cov:.2f}% '
+      f'score={score:.1f} path_pts={len(full_path)}')
 
 # 从 vis JSON 读取 cells + connections
 vis_cells = []
@@ -484,16 +506,20 @@ for n in ['S1','S2','S3','S4','S5','S6','S7','S8','N1_ring','N2_oblique','N3_den
             if component_evals:
                 e = {
                     'net_area': sum(v.get('net_area', 0) or 0 for v in component_evals),
+                    'raw_coverage_rate': min(v.get('raw_coverage_rate', 0) or 0 for v in component_evals),
+                    'effective_coverage_rate': min(v.get('effective_coverage_rate', 0) or 0 for v in component_evals),
                     'coverage_rate': min(v.get('coverage_rate', 0) or 0 for v in component_evals),
                     'single_score': min(v.get('single_score', 0) or 0 for v in component_evals),
                     'uncovered_area': sum(v.get('uncovered_area', 0) or 0 for v in component_evals),
+                    'unreachable_area': sum(v.get('unreachable_area', 0) or 0 for v in component_evals),
+                    'reachable_uncovered_area': sum(v.get('reachable_uncovered_area', 0) or 0 for v in component_evals),
                     'total_distance': sum(v.get('total_distance', 0) or 0 for v in component_evals),
                     'overlap_rate': max(v.get('overlap_rate', 0) or 0 for v in component_evals),
                     'planning_time_ms': sum(v.get('planning_time_ms', 0) or 0 for v in component_evals),
                 }
         a = e.get('net_area',0) or 0
         c = e.get('coverage_rate',0) or 0
-        cc = e.get('corrected_coverage_rate')  # 可能为空
+        cc = e.get('effective_coverage_rate')
         s = e.get('single_score',0) or 0
         u = e.get('uncovered_area',0) or 0
         d = e.get('total_distance',0) or 0

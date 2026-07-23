@@ -186,9 +186,13 @@ class TestCapture(Node):
             return result
 
         patterns = {
-            'coverage_rate': r'覆盖率[:\s]*([\d.]+)%',
+            'raw_coverage_rate': r'原始覆盖率[:\s]*([\d.]+)%',
+            'effective_coverage_rate': r'有效覆盖率[:\s]*([\d.]+)%',
+            'coverage_rate': r'(?<![原始有效正后])覆盖率[:\s]*([\d.]+)%',
             'single_score': r'综合得分[:\s]*([\d.]+)',
-            'uncovered_area': r'未覆盖面积[:\s]*([\d.]+)',
+            'uncovered_area': r'(?<!可达)未覆盖面积[:\s]*([\d.]+)',
+            'unreachable_area': r'不可达面积[:\s]*([\d.]+)',
+            'reachable_uncovered_area': r'可达未覆盖面积[:\s]*([\d.]+)',
             'total_distance': r'路径总长[:\s]*([\d.]+)',
             'work_ratio': r'有效工作比[:\s]*([\d.]+)%',
             'turn_count': r'转弯次数[:\s]*(\d+)',
@@ -206,11 +210,16 @@ class TestCapture(Node):
                     result[key] = int(val)
                 elif key == 'coverage_method':
                     result[key] = val
-                elif key == 'coverage_rate':
+                elif key in ('coverage_rate', 'raw_coverage_rate',
+                             'effective_coverage_rate'):
                     result[key] = float(val) / 100.0
                 else:
                     result[key] = float(val)
 
+        result['coverage_rate'] = result.get('raw_coverage_rate',
+                                             result.get('coverage_rate', 0.0))
+        result['corrected_coverage_rate'] = result.get(
+            'effective_coverage_rate', result['coverage_rate'])
         return result
 
     def parse_component_evals(self):
@@ -221,9 +230,13 @@ class TestCapture(Node):
         if component_count <= 1:
             return []
         patterns = {
-            'coverage_rate': r'覆盖率[:\s]*([\d.]+)%',
+            'raw_coverage_rate': r'原始覆盖率[:\s]*([\d.]+)%',
+            'effective_coverage_rate': r'有效覆盖率[:\s]*([\d.]+)%',
+            'coverage_rate': r'(?<![原始有效正后])覆盖率[:\s]*([\d.]+)%',
             'single_score': r'综合得分[:\s]*([\d.]+)',
-            'uncovered_area': r'未覆盖面积[:\s]*([\d.]+)',
+            'uncovered_area': r'(?<!可达)未覆盖面积[:\s]*([\d.]+)',
+            'unreachable_area': r'不可达面积[:\s]*([\d.]+)',
+            'reachable_uncovered_area': r'可达未覆盖面积[:\s]*([\d.]+)',
             'total_distance': r'路径总长[:\s]*([\d.]+)',
             'work_ratio': r'有效工作比[:\s]*([\d.]+)%',
             'turn_count': r'^转弯次数:\s*(\d+)\s*$',
@@ -239,11 +252,17 @@ class TestCapture(Node):
             return []
         evaluations = []
         for index in range(component_count):
-            evaluations.append({
+            evaluation = {
                 key: int(items[index]) if key == 'turn_count'
                 else float(items[index])
                 for key, items in values.items()
-            })
+            }
+            evaluation['coverage_rate'] = evaluation['raw_coverage_rate'] / 100.0
+            evaluation['raw_coverage_rate'] /= 100.0
+            evaluation['effective_coverage_rate'] /= 100.0
+            evaluation['corrected_coverage_rate'] = evaluation[
+                'effective_coverage_rate']
+            evaluations.append(evaluation)
         return evaluations
 
     def extract_swaths_from_log(self, log_file):

@@ -117,7 +117,8 @@ def render(scenario_name, outer, holes, path_pts, eval_result, output_png,
 
     ax2.set_aspect('equal')
     ax2.set_xlabel('X (m)')
-    cov_raw = eval_result.get('coverage_rate', 0) or 0
+    cov_raw = eval_result.get(
+        'effective_coverage_rate', eval_result.get('coverage_rate', 0)) or 0
     # 自适应格式：>1.0 已是百分比  |  ≤1.0 是比率需×100
     cov_rate = cov_raw if cov_raw > 1.0 else cov_raw * 100.0
     score = eval_result.get('single_score', 0) or 0
@@ -283,6 +284,9 @@ if __name__ == '__main__':
         eval_r = {
             'coverage_rate': min(
                 e.get('coverage_rate', 0) or 0 for e in component_evals),
+            'effective_coverage_rate': min(
+                e.get('effective_coverage_rate', e.get('coverage_rate', 0)) or 0
+                for e in component_evals),
             'single_score': min(
                 e.get('single_score', 0) or 0 for e in component_evals),
         }

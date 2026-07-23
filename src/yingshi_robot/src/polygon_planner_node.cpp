@@ -4111,7 +4111,14 @@ private:
                             vf << "\n";
                         }
                         vf << "  ],\n  \"eval\": {\n";
-                        vf << "    \"coverage_rate\":" << eval_result.coverage_rate << ",\n";
+                        // rate 使用 [0, 1]，面积使用 m²；coverage_rate 和
+                        // corrected_coverage_rate 保留为历史兼容别名。
+                        vf << "    \"coverage_rate\":" << eval_result.raw_coverage_rate << ",\n";
+                        vf << "    \"raw_coverage_rate\":" << eval_result.raw_coverage_rate << ",\n";
+                        vf << "    \"effective_coverage_rate\":" << eval_result.effective_coverage_rate << ",\n";
+                        vf << "    \"corrected_coverage_rate\":" << eval_result.effective_coverage_rate << ",\n";
+                        vf << "    \"unreachable_area\":" << eval_result.unreachable_area << ",\n";
+                        vf << "    \"reachable_uncovered_area\":" << eval_result.reachable_uncovered_area << ",\n";
                         vf << "    \"single_score\":" << eval_result.single_score << "\n";
                         vf << "  }";
 

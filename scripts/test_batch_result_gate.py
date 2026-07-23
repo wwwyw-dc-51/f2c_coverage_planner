@@ -15,8 +15,12 @@ def valid_report():
         "swaths": [{"points": [[0.0, 0.0], [1.0, 0.0]]}],
         "eval": {
             "coverage_rate": 99.0,
+            "raw_coverage_rate": 99.0,
+            "effective_coverage_rate": 99.5,
             "single_score": 80.0,
             "uncovered_area": 0.1,
+            "unreachable_area": 0.5,
+            "reachable_uncovered_area": 0.1,
             "total_distance": 10.0,
             "work_ratio": 90.0,
             "turn_count": 1,
@@ -100,11 +104,22 @@ class BatchResultGateTest(unittest.TestCase):
 
     def test_rejects_report_below_coverage_threshold(self):
         report = valid_report()
-        report["eval"]["coverage_rate"] = 98.99
+        report["eval"]["effective_coverage_rate"] = 98.99
 
         errors = validate_report(report, coverage_threshold=0.99)
 
         self.assertTrue(any("coverage_rate" in error for error in errors))
+
+    def test_uses_effective_coverage_for_the_gate(self):
+        report = valid_report()
+        report["eval"]["raw_coverage_rate"] = 100.0
+        report["eval"]["coverage_rate"] = 100.0
+        report["eval"]["effective_coverage_rate"] = 98.99
+
+        errors = validate_report(report, coverage_threshold=0.99)
+
+        self.assertTrue(any(
+            "effective_coverage_rate" in error for error in errors))
 
     def test_rejects_incomplete_capture_or_stale_artifacts(self):
         for status_name in valid_report()["batch_status"]:
@@ -128,8 +143,10 @@ class BatchResultGateTest(unittest.TestCase):
 
     def test_rejects_missing_or_non_finite_evaluation_metrics(self):
         metric_names = (
-            "coverage_rate", "single_score", "uncovered_area", "total_distance",
-            "work_ratio", "turn_count", "overlap_rate", "planning_time_ms", "net_area",
+            "coverage_rate", "raw_coverage_rate", "effective_coverage_rate",
+            "single_score", "uncovered_area", "unreachable_area",
+            "reachable_uncovered_area", "total_distance", "work_ratio",
+            "turn_count", "overlap_rate", "planning_time_ms", "net_area",
         )
         for metric_name in metric_names:
             with self.subTest(metric_name=metric_name):
@@ -143,8 +160,12 @@ class BatchResultGateTest(unittest.TestCase):
     def test_rejects_metrics_outside_their_semantic_ranges(self):
         invalid_metrics = {
             "coverage_rate": 100.01,
+            "raw_coverage_rate": 100.01,
+            "effective_coverage_rate": -0.01,
             "single_score": -0.01,
             "uncovered_area": -0.01,
+            "unreachable_area": -0.01,
+            "reachable_uncovered_area": -0.01,
             "total_distance": -0.01,
             "work_ratio": -0.01,
             "turn_count": -1,

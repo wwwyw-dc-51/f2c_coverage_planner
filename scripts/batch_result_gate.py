@@ -16,8 +16,12 @@ REQUIRED_BATCH_STATUS = (
 )
 REQUIRED_EVAL_METRICS = (
     "coverage_rate",
+    "raw_coverage_rate",
+    "effective_coverage_rate",
     "single_score",
     "uncovered_area",
+    "unreachable_area",
+    "reachable_uncovered_area",
     "total_distance",
     "work_ratio",
     "turn_count",
@@ -27,10 +31,14 @@ REQUIRED_EVAL_METRICS = (
 )
 BOUNDED_EVAL_METRICS = {
     "coverage_rate": (0.0, 100.0),
+    "raw_coverage_rate": (0.0, 100.0),
+    "effective_coverage_rate": (0.0, 100.0),
     "single_score": (0.0, 100.0),
 }
 NON_NEGATIVE_EVAL_METRICS = (
     "uncovered_area",
+    "unreachable_area",
+    "reachable_uncovered_area",
     "total_distance",
     "work_ratio",
     "overlap_rate",
@@ -83,11 +91,11 @@ def _validate_evaluation(evaluation, prefix, coverage_threshold, errors):
     if _is_finite_number(net_area) and net_area <= 0.0:
         errors.append(f"{prefix}.net_area 必须大于零")
 
-    coverage_rate = evaluation.get("coverage_rate")
-    if _is_finite_number(coverage_rate) and (
-            coverage_rate + 1e-9 < coverage_threshold * 100.0):
+    effective_coverage_rate = evaluation.get("effective_coverage_rate")
+    if _is_finite_number(effective_coverage_rate) and (
+            effective_coverage_rate + 1e-9 < coverage_threshold * 100.0):
         errors.append(
-            f"{prefix}.coverage_rate={coverage_rate:.2f}% 低于门槛 "
+            f"{prefix}.effective_coverage_rate={effective_coverage_rate:.2f}% 低于门槛 "
             f"{coverage_threshold * 100.0:.2f}%")
 
 
@@ -240,10 +248,10 @@ def main(argv=None):
     cspace = report.get("cspace", {})
     if cspace.get("component_count", 1) > 1:
         coverage_rate = min(
-            evaluation["coverage_rate"]
+            evaluation["effective_coverage_rate"]
             for evaluation in report["component_evals"])
     else:
-        coverage_rate = report["eval"]["coverage_rate"]
+        coverage_rate = report["eval"]["effective_coverage_rate"]
     print(f"  GATE PASS [{scenario}]: coverage={coverage_rate:.2f}%")
     return 0
 
