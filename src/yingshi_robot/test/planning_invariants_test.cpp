@@ -258,6 +258,24 @@ TEST(CellOrder, PreservesBoundaryFillAtExplicitCellEnd)
     EXPECT_NEAR(swathMidY(cells.at(0).back()), 0.185, 1e-9);
 }
 
+TEST(CellOrder, SortsSwathsBeforeChoosingCellDirection)
+{
+    f2c::types::Swaths cell;
+    cell.push_back(makeSwath(0.0, 3.0, 10.0, 3.0, 0.90, 30));
+    cell.push_back(makeSwath(0.0, 1.0, 10.0, 1.0, 0.90, 31));
+    cell.push_back(makeSwath(0.0, 2.0, 10.0, 2.0, 0.90, 32));
+    f2c::types::SwathsByCells cells {cell};
+    std::vector<size_t> order;
+
+    yingshi::greedyCellOrder(cells, order, {});
+
+    ASSERT_EQ(cells.size(), 1U);
+    ASSERT_EQ(cells.at(0).size(), 3U);
+    EXPECT_NEAR(swathMidY(cells.at(0).at(0)), 1.0, 1e-9);
+    EXPECT_NEAR(swathMidY(cells.at(0).at(1)), 2.0, 1e-9);
+    EXPECT_NEAR(swathMidY(cells.at(0).at(2)), 3.0, 1e-9);
+}
+
 TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryDirection)
 {
     f2c::types::Swaths first_cell;

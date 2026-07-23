@@ -733,8 +733,20 @@ void greedyCellOrder(
     cell_order.resize(n_cells);
     for (size_t i = 0; i < n_cells; ++i) cell_order[i] = i;
 
-    // 单 cell 无需排序
-    if (n_cells <= 1) return;
+    if (n_cells == 0) return;
+
+    // v9.1 的固定前置步骤：先在每个 Cell 内恢复标准往复式顺序，
+    // 再让出口驱动贪心决定 Cell 顺序和整体反转方向。不能让贪心
+    // 直接消费生成器的原始 Swath 顺序，否则单 Cell 也会产生长跳转。
+    for (auto& cell : swaths_by_cells) {
+        if (cell.size() == 0) continue;
+        for (size_t swath_index = 0;
+             swath_index < cell.size(); ++swath_index) {
+            cell.at(swath_index).setId(static_cast<int>(swath_index));
+        }
+        f2c::rp::BoustrophedonOrder sorter;
+        cell = sorter.genSortedSwaths(cell);
+    }
 
     // 孔洞裁剪或接缝去重可能留下空 Cell；从第一个非空 Cell 启动，
     // 避免把空组当作出口解引用，同时保持原始索引映射。
