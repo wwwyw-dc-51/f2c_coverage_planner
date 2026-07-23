@@ -258,10 +258,10 @@ TEST(CellOrder, PreservesBoundaryFillAtExplicitCellEnd)
     EXPECT_NEAR(swathMidY(cells.at(0).back()), 0.185, 1e-9);
 }
 
-TEST(CellOrder, SortsSwathsBeforeChoosingCellDirection)
+TEST(CellOrder, PreservesGeneratedOrderBeforeChoosingCellDirection)
 {
     f2c::types::Swaths cell;
-    // 生成器可能返回非几何顺序，但 Swath ID 仍保存其蛇形排序顺序。
+    // v9.12 先按生成顺序重新编号，再交给 F2C 排序器生成变体。
     cell.push_back(makeSwath(0.0, 3.0, 10.0, 3.0, 0.90, 2));
     cell.push_back(makeSwath(0.0, 1.0, 10.0, 1.0, 0.90, 0));
     cell.push_back(makeSwath(0.0, 2.0, 10.0, 2.0, 0.90, 1));
@@ -272,9 +272,9 @@ TEST(CellOrder, SortsSwathsBeforeChoosingCellDirection)
 
     ASSERT_EQ(cells.size(), 1U);
     ASSERT_EQ(cells.at(0).size(), 3U);
-    EXPECT_NEAR(swathMidY(cells.at(0).at(0)), 1.0, 1e-9);
-    EXPECT_NEAR(swathMidY(cells.at(0).at(1)), 2.0, 1e-9);
-    EXPECT_NEAR(swathMidY(cells.at(0).at(2)), 3.0, 1e-9);
+    EXPECT_NEAR(swathMidY(cells.at(0).at(0)), 3.0, 1e-9);
+    EXPECT_NEAR(swathMidY(cells.at(0).at(1)), 1.0, 1e-9);
+    EXPECT_NEAR(swathMidY(cells.at(0).at(2)), 2.0, 1e-9);
 }
 
 TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryDirection)
@@ -293,11 +293,49 @@ TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryDirection)
     ASSERT_EQ(cells.size(), 2U);
     ASSERT_EQ(cells.at(1).size(), 2U);
     EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 10.0, 1e-9);
-    EXPECT_NEAR(cells.at(1).at(0).startPoint().getY(), 2.0, 1e-9);
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getY(), 1.0, 1e-9);
     EXPECT_NEAR(
         cells.at(0).back().endPoint().distance(
             cells.at(1).at(0).startPoint()),
-        2.0, 1e-9);
+        1.0, 1e-9);
+}
+
+TEST(CellOrder, V912OptimizesHoleOrderedEntryVariantsAcrossTheWholeChain)
+{
+    f2c::types::Swaths first_cell;
+    first_cell.push_back(makeSwath(0.0, 0.0, 4.0, 0.0, 0.90, 0));
+
+    f2c::types::Swaths second_cell;
+    second_cell.push_back(makeSwath(0.0, 0.0, 10.0, 0.0, 0.90, 0));
+
+    f2c::types::Swaths third_cell;
+    third_cell.push_back(makeSwath(0.0, 1.0, 0.0, 2.0, 0.90, 0));
+
+    f2c::types::SwathsByCells cells {
+        first_cell, second_cell, third_cell};
+    std::vector<size_t> order;
+    const std::vector<f2c::types::LinearRing> holes {
+        yingshi::makeClosedRing({
+            f2c::types::Point(-1.1, -0.1),
+            f2c::types::Point(-0.9, -0.1),
+            f2c::types::Point(-0.9, 0.1),
+            f2c::types::Point(-1.1, 0.1),
+        })
+    };
+
+    // v9.12 的孔洞模式：固定极角 Cell 顺序，四种入口变体做链式 DP。
+    yingshi::greedyCellOrder(cells, order, holes, "boustrophedon");
+
+    ASSERT_EQ(cells.size(), 3U);
+    ASSERT_EQ(order, (std::vector<size_t> {0U, 1U, 2U}));
+    EXPECT_NEAR(cells.at(1).at(0).startPoint().getX(), 10.0, 1e-9);
+
+    double connection_sum = 0.0;
+    for (size_t i = 1; i < cells.size(); ++i) {
+        connection_sum += cells.at(i - 1).back().endPoint().distance(
+            cells.at(i).at(0).startPoint());
+    }
+    EXPECT_LT(connection_sum, 8.0);
 }
 
 TEST(CellOrder, PreservesEmptyCellSlotsAndOriginalOrderMapping)

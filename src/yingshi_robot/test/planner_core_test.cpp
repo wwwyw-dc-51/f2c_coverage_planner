@@ -200,7 +200,7 @@ TEST(PlannerCore, KeepsShortestConnectionsBetweenOrderedSwaths)
 
     ASSERT_TRUE(result.success) << result.error_message;
     ASSERT_GT(result.total_swaths, 2U);
-    // Cell-block 只固定遍历顺序，不能丢掉相邻 Swath 的最短安全连接。
+    // v9.12 genRoute 仍应保留相邻 Swath 的最短安全连接。
     EXPECT_GE(result.total_connections, result.total_swaths);
 }
 

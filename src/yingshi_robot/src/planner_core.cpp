@@ -171,24 +171,56 @@ double holeRepairClearance(
         physicalFootprintClearanceRadius(req.physical_footprint));
 }
 
-// Cell-block 路由：保持贪心排好的 Cell/Swath 顺序，
-// 但每一条相邻 Swath 都通过 F2C 的 shortest graph 连接。
-f2c::types::Route buildCellBlockRoute(
+// Snake 模式直连路由；其他模式保留 v9.12 的 genRoute。
+f2c::types::Route buildSnakeRoute(
     const f2c::types::SwathsByCells& swaths_by_cells,
     const f2c::types::Cells& mid_hl)
 {
-    f2c::rp::RoutePlannerBase route_planner;
-    auto shortest_graph = route_planner.createShortestGraph(
-        mid_hl, swaths_by_cells, 1e-4);
-
     f2c::types::Route route;
-    for (const auto& cell_swaths : swaths_by_cells) {
-        for (const auto& swath : cell_swaths) {
-            // 输入已经由 greedyCellOrder 排好；这里不再调用任何全局排序。
-            // addSwath(Graph2D) 会为当前顺序中的每一条 Swath 生成
-            // headland/Cell 边界上的最短安全连接。
-            route.addSwath(swath, shortest_graph);
+    route.addConnection(f2c::types::MultiPoint());
+
+    for (size_t ci = 0; ci < swaths_by_cells.size(); ++ci) {
+        if (swaths_by_cells.at(ci).size() == 0) continue;
+        route.addSwaths(swaths_by_cells.at(ci));
+
+        f2c::types::MultiPoint conn;
+        size_t next = ci + 1;
+        while (next < swaths_by_cells.size() &&
+               swaths_by_cells.at(next).size() == 0) ++next;
+        if (next >= swaths_by_cells.size()) {
+            route.addConnection(conn);
+            continue;
         }
+
+        const auto& last_sw = swaths_by_cells.at(ci).back();
+        const auto& next_sw = swaths_by_cells.at(next).at(0);
+        double lx = last_sw.endPoint().getX();
+        double ly = last_sw.endPoint().getY();
+        double nx = next_sw.startPoint().getX();
+        double ny = next_sw.startPoint().getY();
+
+        conn.addPoint(lx, ly);
+        if (mid_hl.size() > 0) {
+            const auto& hl = mid_hl.getGeometry(0).getExteriorRing();
+            if (hl.size() > 2) {
+                double hlx = 0, hly = 0;
+                for (size_t hi = 0; hi + 1 < hl.size(); ++hi) {
+                    hlx += hl.getGeometry(hi).getX();
+                    hly += hl.getGeometry(hi).getY();
+                }
+                hlx /= (hl.size() - 1);
+                hly /= (hl.size() - 1);
+                double mx = (lx + nx) * 0.5;
+                double my = (ly + ny) * 0.5;
+                double dx = mx - hlx;
+                double dy = my - hly;
+                double d = std::hypot(dx, dy);
+                if (d > 0.01)
+                    conn.addPoint(hlx + dx * 0.3, hly + dy * 0.3);
+            }
+        }
+        conn.addPoint(nx, ny);
+        route.addConnection(conn);
     }
     return route;
 }
@@ -417,13 +449,14 @@ PlanningComponentResult planSingleComponent(
             cell_order.push_back(i);
 
         if (req.swath_order_type != "none") {
-            greedyCellOrder(swaths_by_cells, cell_order, req.holes);
+            greedyCellOrder(swaths_by_cells, cell_order, req.holes,
+                            req.swath_order_type);
         }
 
-        // ── 7. 构建 Route：贪心模式保持 Cell-block；none 才使用 F2C TSP 基线 ──
+        // ── 7. 构建 Route：恢复 v9.12 的 Snake 特例与 genRoute 基线 ──
         f2c::types::Route route;
-        if (req.swath_order_type != "none") {
-            route = buildCellBlockRoute(swaths_by_cells, mid_hl);
+        if (req.swath_order_type == "snake") {
+            route = buildSnakeRoute(swaths_by_cells, mid_hl);
         } else {
             f2c::rp::RoutePlannerBase route_planner;
             route = route_planner.genRoute(mid_hl, swaths_by_cells);
