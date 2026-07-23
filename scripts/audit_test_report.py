@@ -10,6 +10,37 @@ import re
 import sys
 
 
+DEFAULT_COVERAGE_WIDTH = 0.90
+DEFAULT_SWATH_OVERLAP_RATIO = 0.03
+DEFAULT_MIN_TURN_MERGE_DISTANCE = 0.75
+DEFAULT_TURN_ANGLE_THRESHOLD_DEG = 30.0
+DEFAULT_CLEARANCE_TOLERANCE = 1e-6
+
+SCENARIO_POLYGON_FILES = {
+    "S1": "src/yingshi_robot/test_polygons/S1_S1_convex_rect.yaml",
+    "S2": "src/yingshi_robot/test_polygons/S2_S2_L_shaped.yaml",
+    "S3": "src/yingshi_robot/test_polygons/S3_S3_with_holes.yaml",
+    "S4": "src/yingshi_robot/test_polygons/S4_S4_narrow_corridor.yaml",
+    "S5": "src/yingshi_robot/test_polygons/S5_S5_irregular.yaml",
+    "S6": "src/yingshi_robot/test_polygons/S6_S6_multi_region.yaml",
+    "S7": "src/yingshi_robot/test_polygons/S7_S7_factory_workshop.yaml",
+    "S8": "src/yingshi_robot/config/f2c_areas/notched_10m_with_center_hole.yaml",
+    "N1_ring": "src/yingshi_robot/test_polygons/ring.yaml",
+    "N2_oblique": "src/yingshi_robot/test_polygons/oblique_with_round_hole.yaml",
+    "N3_dense": "src/yingshi_robot/test_polygons/dense_shelves.yaml",
+    "N4_wmixed": "src/yingshi_robot/test_polygons/warehouse_mixed_shelves.yaml",
+    "N5_ucorr": "src/yingshi_robot/test_polygons/u_corridor.yaml",
+    "N6_llarge": "src/yingshi_robot/test_polygons/l_shape_large.yaml",
+    "N7_gate": "src/yingshi_robot/test_polygons/gate_shape.yaml",
+    "N8_ushape": "src/yingshi_robot/test_polygons/u_shape.yaml",
+    "N9_wshelv": "src/yingshi_robot/test_polygons/warehouse_shelves.yaml",
+    "N10_whoriz": "src/yingshi_robot/test_polygons/warehouse_horiz_shelves.yaml",
+    "N11_whole": "src/yingshi_robot/test_polygons/warehouse_shelves_with_hole.yaml",
+    "N12_lware": "src/yingshi_robot/test_polygons/large_warehouse.yaml",
+    "N13_robs": "src/yingshi_robot/test_polygons/rect_multi_obstacles.yaml",
+}
+
+
 @dataclass(frozen=True)
 class Finding:
     code: str
@@ -151,7 +182,59 @@ def _estimated_retrace_length(
     return duplicate_length
 
 
-def audit_report(report, polygon, robot_width=0.75, merge_distance=0.75):
+def _report_setting(report, *names):
+    for container in (report, report.get("eval", {})):
+        if not isinstance(container, dict):
+            continue
+        for name in names:
+            value = container.get(name)
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                return float(value)
+    return None
+
+
+def _resolve_turn_merge_distance(report, explicit_distance=None):
+    if explicit_distance is not None:
+        return max(0.0, float(explicit_distance))
+
+    reported_distance = _report_setting(
+        report, "turn_merge_distance", "min_turn_merge_distance")
+    if reported_distance is not None:
+        return max(0.0, reported_distance)
+
+    effective_width = _report_setting(
+        report, "effective_swath_width", "effective_width")
+    if effective_width is None:
+        coverage_width = _report_setting(report, "coverage_width")
+        overlap_ratio = _report_setting(
+            report, "swath_overlap_ratio", "overlap_ratio")
+        if coverage_width is not None and overlap_ratio is not None:
+            effective_width = coverage_width * (1.0 - overlap_ratio)
+
+    minimum_distance = _report_setting(
+        report, "configured_min_turn_merge_distance")
+    if minimum_distance is None:
+        minimum_distance = DEFAULT_MIN_TURN_MERGE_DISTANCE
+    if effective_width is None:
+        effective_width = (
+            DEFAULT_COVERAGE_WIDTH * (1.0 - DEFAULT_SWATH_OVERLAP_RATIO))
+    return max(minimum_distance, 1.05 * effective_width)
+
+
+def _resolve_turn_angle_threshold(report, explicit_threshold=None):
+    if explicit_threshold is not None:
+        return float(explicit_threshold)
+    reported_threshold = _report_setting(
+        report, "turn_angle_threshold", "turn_angle_threshold_deg")
+    if reported_threshold is not None:
+        return reported_threshold
+    return DEFAULT_TURN_ANGLE_THRESHOLD_DEG
+
+
+def audit_report(
+        report, polygon, robot_width=0.75, merge_distance=None,
+        clearance_tolerance=DEFAULT_CLEARANCE_TOLERANCE,
+        angle_threshold_deg=None):
     """检查单场景报告，返回按严重程度分类的发现。"""
     findings = []
     path_points = _path_points(report.get("path", []))
@@ -169,8 +252,15 @@ def audit_report(report, polygon, robot_width=0.75, merge_distance=0.75):
         ))
     reported_turns = report.get("eval", {}).get("turn_count")
     if reported_turns is not None:
+        resolved_merge_distance = _resolve_turn_merge_distance(
+            report, merge_distance)
+        resolved_angle_threshold = _resolve_turn_angle_threshold(
+            report, angle_threshold_deg)
         geometry_turns = _geometry_turn_count(
-            report.get("path", []), merge_distance=merge_distance)
+            report.get("path", []),
+            angle_threshold_deg=resolved_angle_threshold,
+            merge_distance=resolved_merge_distance,
+        )
         if int(reported_turns) != geometry_turns:
             findings.append(Finding(
                 code="TURN_COUNT_MISMATCH",
@@ -192,7 +282,8 @@ def audit_report(report, polygon, robot_width=0.75, merge_distance=0.75):
         path_points,
         lambda point: (
             not _point_in_work_area(point, polygon)
-            or _boundary_clearance(point, polygon) + 1e-9 < required_clearance
+            or _boundary_clearance(point, polygon) + clearance_tolerance <
+            required_clearance
         ),
     )
     if required_clearance > 0.0 and unsafe_length > 0.05:
@@ -280,6 +371,12 @@ def load_polygon_yaml(path):
 
 
 def _find_polygon_file(repo_root, scenario):
+    mapped_path = SCENARIO_POLYGON_FILES.get(scenario)
+    if mapped_path:
+        candidate = repo_root / mapped_path
+        if candidate.is_file():
+            return candidate
+
     search_dirs = [
         repo_root / "src" / "yingshi_robot" / "test_polygons",
         repo_root / "src" / "yingshi_robot" / "config" / "f2c_areas",
@@ -293,7 +390,10 @@ def _find_polygon_file(repo_root, scenario):
     return None
 
 
-def audit_batch(batch_dir, repo_root, robot_width=0.75, merge_distance=0.75):
+def audit_batch(
+        batch_dir, repo_root, robot_width=0.75, merge_distance=None,
+        clearance_tolerance=DEFAULT_CLEARANCE_TOLERANCE,
+        angle_threshold_deg=None):
     results = []
     report_paths = list(Path(batch_dir).glob("*_data.json"))
     report_paths.sort(key=lambda path: (
@@ -320,6 +420,8 @@ def audit_batch(batch_dir, repo_root, robot_width=0.75, merge_distance=0.75):
                     polygon,
                     robot_width=robot_width,
                     merge_distance=merge_distance,
+                    clearance_tolerance=clearance_tolerance,
+                    angle_threshold_deg=angle_threshold_deg,
                 )
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 findings = [Finding(
@@ -368,10 +470,22 @@ def main(argv=None):
     parser.add_argument(
         "--merge-distance",
         type=float,
-        default=0.75,
+        default=None,
         help="相邻方向变化归并为同一转弯的最小路径距离（米）",
     )
     parser.add_argument("--markdown", help="可选的 Markdown 输出路径")
+    parser.add_argument(
+        "--clearance-tolerance",
+        type=float,
+        default=DEFAULT_CLEARANCE_TOLERANCE,
+        help="boundary clearance comparison tolerance (m)",
+    )
+    parser.add_argument(
+        "--angle-threshold",
+        type=float,
+        default=None,
+        help="turn angle threshold in degrees",
+    )
     args = parser.parse_args(argv)
 
     results = audit_batch(
@@ -379,6 +493,8 @@ def main(argv=None):
         args.repo_root,
         robot_width=args.robot_width,
         merge_distance=args.merge_distance,
+        clearance_tolerance=args.clearance_tolerance,
+        angle_threshold_deg=args.angle_threshold,
     )
     markdown = format_markdown(args.batch_dir, results)
     print(markdown)

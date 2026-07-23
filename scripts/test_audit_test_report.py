@@ -5,7 +5,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from audit_test_report import audit_report, main
+from audit_test_report import (
+    SCENARIO_POLYGON_FILES,
+    _find_polygon_file,
+    audit_report,
+    main,
+)
 
 
 class AuditReportTest(unittest.TestCase):
@@ -112,6 +117,36 @@ class AuditReportTest(unittest.TestCase):
 
         self.assertNotIn("FOOTPRINT_CLEARANCE", {finding.code for finding in findings})
 
+    def test_clearance_rounding_error_is_inside_tolerance(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 0.3749999711989731},
+                {"x": 9.0, "y": 0.3749999711989731},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 0.375}, {"x": 9.0, "y": 0.375}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertNotIn("FOOTPRINT_CLEARANCE", {finding.code for finding in findings})
+
+    def test_clearance_real_shortfall_is_still_reported(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 0.374},
+                {"x": 9.0, "y": 0.374},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 0.374}, {"x": 9.0, "y": 0.374}]}],
+            "eval": {},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertIn("FOOTPRINT_CLEARANCE", {finding.code for finding in findings})
+
     def test_turn_merge_distance_is_configurable(self):
         report = {
             "path": [
@@ -130,6 +165,40 @@ class AuditReportTest(unittest.TestCase):
 
         self.assertNotIn("TURN_COUNT_MISMATCH", {finding.code for finding in merged_findings})
         self.assertIn("TURN_COUNT_MISMATCH", {finding.code for finding in split_findings})
+
+    def test_default_turn_merge_distance_matches_evaluator_baseline(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 1.0},
+                {"x": 2.0, "y": 1.0},
+                {"x": 2.0, "y": 1.6},
+                {"x": 3.0, "y": 1.6},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}]}],
+            "eval": {"turn_count": 1},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertNotIn("TURN_COUNT_MISMATCH", {finding.code for finding in findings})
+
+    def test_report_turn_merge_distance_overrides_default(self):
+        report = {
+            "path": [
+                {"x": 1.0, "y": 1.0},
+                {"x": 2.0, "y": 1.0},
+                {"x": 2.0, "y": 1.6},
+                {"x": 3.0, "y": 1.6},
+            ],
+            "swaths": [{"points": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}]}],
+            "eval": {"turn_count": 1, "turn_merge_distance": 1.0},
+        }
+        polygon = {"polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+
+        findings = audit_report(report, polygon)
+
+        self.assertNotIn("TURN_COUNT_MISMATCH", {finding.code for finding in findings})
 
     def test_reports_excessive_sub_centimeter_segments(self):
         report = {
@@ -242,6 +311,28 @@ class AuditReportTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 1)
             self.assertIn("REPORT_READ_ERROR", markdown.read_text(encoding="utf-8"))
+
+    def test_explicit_mapping_covers_extended_scenarios(self):
+        expected = {
+            "S8",
+            "N1_ring", "N2_oblique", "N3_dense", "N4_wmixed",
+            "N5_ucorr", "N6_llarge", "N7_gate", "N8_ushape",
+            "N9_wshelv", "N10_whoriz", "N11_whole", "N12_lware",
+            "N13_robs",
+        }
+        self.assertTrue(expected.issubset(SCENARIO_POLYGON_FILES))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for relative_path in SCENARIO_POLYGON_FILES.values():
+                polygon_path = root / relative_path
+                polygon_path.parent.mkdir(parents=True, exist_ok=True)
+                polygon_path.write_text("polygon: []\nholes: []\n", encoding="utf-8")
+
+            self.assertEqual(
+                _find_polygon_file(root, "N3_dense"),
+                root / SCENARIO_POLYGON_FILES["N3_dense"],
+            )
 
 
 if __name__ == "__main__":
