@@ -261,9 +261,10 @@ TEST(CellOrder, PreservesBoundaryFillAtExplicitCellEnd)
 TEST(CellOrder, SortsSwathsBeforeChoosingCellDirection)
 {
     f2c::types::Swaths cell;
-    cell.push_back(makeSwath(0.0, 3.0, 10.0, 3.0, 0.90, 30));
-    cell.push_back(makeSwath(0.0, 1.0, 10.0, 1.0, 0.90, 31));
-    cell.push_back(makeSwath(0.0, 2.0, 10.0, 2.0, 0.90, 32));
+    // 生成器可能返回非几何顺序，但 Swath ID 仍保存其蛇形排序顺序。
+    cell.push_back(makeSwath(0.0, 3.0, 10.0, 3.0, 0.90, 2));
+    cell.push_back(makeSwath(0.0, 1.0, 10.0, 1.0, 0.90, 0));
+    cell.push_back(makeSwath(0.0, 2.0, 10.0, 2.0, 0.90, 1));
     f2c::types::SwathsByCells cells {cell};
     std::vector<size_t> order;
 

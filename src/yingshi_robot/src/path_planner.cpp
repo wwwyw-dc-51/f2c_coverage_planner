@@ -740,10 +740,6 @@ void greedyCellOrder(
     // 直接消费生成器的原始 Swath 顺序，否则单 Cell 也会产生长跳转。
     for (auto& cell : swaths_by_cells) {
         if (cell.size() == 0) continue;
-        for (size_t swath_index = 0;
-             swath_index < cell.size(); ++swath_index) {
-            cell.at(swath_index).setId(static_cast<int>(swath_index));
-        }
         f2c::rp::BoustrophedonOrder sorter;
         cell = sorter.genSortedSwaths(cell);
     }
