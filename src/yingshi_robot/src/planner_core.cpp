@@ -505,6 +505,8 @@ PlanningComponentResult planSingleComponent(
         // TSP 对照和未约束物理 footprint 管线保持原样。
         if (cspace_constrained && req.turn_planner_type == "direct" &&
             req.swath_order_type != "none") {
+            removeSafeMicroDetours(
+                route, req.polygon, req.holes, 2e-4);
             shortenSafeRouteConnections(
                 route, req.polygon, req.holes, 2.0, 0.05);
         }

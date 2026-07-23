@@ -611,6 +611,71 @@ size_t shortenSafeRouteConnections(
     return shortened_connections;
 }
 
+size_t removeSafeMicroDetours(
+    f2c::types::Route& route,
+    const f2c::types::Cell& planning_cell,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double max_micro_segment)
+{
+    if (route.sizeConnections() == 0 ||
+        planning_cell.getExteriorRing().size() < 4 ||
+        !std::isfinite(max_micro_segment) ||
+        max_micro_segment <= 0.0) {
+        return 0;
+    }
+
+    size_t removed_points = 0;
+    for (size_t connection_idx = 0;
+         connection_idx < route.sizeConnections(); ++connection_idx) {
+        std::vector<f2c::types::Point> points;
+        const auto& connection = route.getConnection(connection_idx);
+        points.reserve(connection.size());
+        for (const auto& point : connection) {
+            appendDistinct(points, point);
+        }
+        if (points.size() < 3) continue;
+
+        bool changed = true;
+        while (changed && points.size() >= 3) {
+            changed = false;
+            for (size_t point_idx = 1;
+                 point_idx + 1 < points.size(); ++point_idx) {
+                const auto& previous = points[point_idx - 1];
+                const auto& current = points[point_idx];
+                const auto& next = points[point_idx + 1];
+                const double left_length = previous.distance(current);
+                const double right_length = current.distance(next);
+                if (left_length > max_micro_segment &&
+                    right_length > max_micro_segment) {
+                    continue;
+                }
+
+                const double old_length = left_length + right_length;
+                const double new_length = previous.distance(next);
+                if (old_length - new_length <= 1e-9 ||
+                    !segmentInsideFreeSpaceForShortcut(
+                        previous, next, planning_cell, hole_rings)) {
+                    continue;
+                }
+
+                points.erase(points.begin() + point_idx);
+                ++removed_points;
+                changed = true;
+                break;
+            }
+        }
+
+        if (points.size() != connection.size()) {
+            f2c::types::MultiPoint cleaned_connection;
+            for (const auto& point : points) {
+                cleaned_connection.addPoint(point);
+            }
+            route.setConnection(connection_idx, cleaned_connection);
+        }
+    }
+    return removed_points;
+}
+
 size_t synchronizeRouteConnectionEndpoints(
     f2c::types::Route& route,
     double max_endpoint_shift)

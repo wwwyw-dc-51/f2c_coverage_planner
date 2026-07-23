@@ -844,6 +844,33 @@ TEST(RouteInvariant, KeepsShortConnectionWhenDirectSegmentLeavesConcaveCell)
     EXPECT_EQ(route.getConnection(1).size(), 4U);
 }
 
+TEST(RouteInvariant, RemovesSafeMicroDetourWithoutChangingEndpoints)
+{
+    const auto planning_cell = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Route route;
+    f2c::types::Swaths first;
+    first.push_back(makeSwath(2.0, 2.0, 2.5, 2.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first);
+
+    f2c::types::MultiPoint connection;
+    connection.addPoint(f2c::types::Point(2.5, 2.0));
+    connection.addPoint(f2c::types::Point(2.4999, 2.00005));
+    connection.addPoint(f2c::types::Point(2.5, 2.0001));
+    connection.addPoint(f2c::types::Point(2.5, 4.0));
+    f2c::types::Swaths second;
+    second.push_back(makeSwath(2.5, 4.0, 3.0, 4.0));
+    route.addConnectedSwaths(connection, second);
+
+    EXPECT_EQ(yingshi::removeSafeMicroDetours(
+        route, planning_cell, {}), 2U);
+    const auto& cleaned = route.getConnection(1);
+    ASSERT_EQ(cleaned.size(), 2U);
+    EXPECT_DOUBLE_EQ(cleaned.getGeometry(0).getX(), 2.5);
+    EXPECT_DOUBLE_EQ(cleaned.getGeometry(0).getY(), 2.0);
+    EXPECT_DOUBLE_EQ(cleaned.getGeometry(1).getX(), 2.5);
+    EXPECT_DOUBLE_EQ(cleaned.getGeometry(1).getY(), 4.0);
+}
+
 TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)
 {
     f2c::types::Route route;

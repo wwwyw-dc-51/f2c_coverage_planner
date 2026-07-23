@@ -45,6 +45,15 @@ size_t shortenSafeRouteConnections(
     double max_direct_length = 2.0,
     double min_saved_length = 0.05);
 
+// 删除连接中由边界交点数值误差产生的微型折返段，返回删除的中间点数。
+// 只尝试移除相邻短段涉及的中间点；替代线段必须保持在自由空间内，
+// 且首尾端点不变。失败时保留原连接。
+size_t removeSafeMicroDetours(
+    f2c::types::Route& route,
+    const f2c::types::Cell& planning_cell,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double max_micro_segment = 2e-4);
+
 // swath 端点缩进后，同步每条跨 group connection 的首尾点。
 // 距新端点不超过 max_endpoint_shift 的单控制点视为旧端点并删除；
 // 更远的单控制点和多点 connection 的中间绕障点保持不变。
