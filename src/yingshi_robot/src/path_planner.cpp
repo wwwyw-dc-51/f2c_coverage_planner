@@ -743,8 +743,12 @@ void greedyCellOrder(
         ++start_ci;
     }
     if (start_ci == n_cells) {
-        swaths_by_cells = f2c::types::SwathsByCells();
-        cell_order.clear();
+        // 保留空 Cell 的数量和索引映射；调用方会在后续统一报告
+        // “裁剪后无可覆盖 Swath”，不能把空 vector 当作正常结果。
+        cell_order.resize(n_cells);
+        for (size_t ci = 0; ci < n_cells; ++ci) {
+            cell_order[ci] = ci;
+        }
         return;
     }
 
@@ -790,7 +794,7 @@ void greedyCellOrder(
             if (!hole_rings.empty() &&
                 yingshi::segmentCrossesHole(
                     cur_x, cur_y, fsx, fsy, hole_rings, 20)) {
-                dist_normal += 1000.0;  // 穿洞惩罚
+                dist_normal += 1e9;  // 硬约束：视穿洞连接为不可行
             }
 
             // 候选2: 反转方向 — cur → cell.last.end
@@ -798,7 +802,7 @@ void greedyCellOrder(
             if (!hole_rings.empty() &&
                 yingshi::segmentCrossesHole(
                     cur_x, cur_y, lex, ley, hole_rings, 20)) {
-                dist_rev += 1000.0;
+                dist_rev += 1e9;
             }
 
             if (dist_normal < best_dist) {
@@ -813,7 +817,8 @@ void greedyCellOrder(
             }
         }
 
-        // 无有效候选（所有剩余 cell 均为空）→ 提前退出
+        // 无有效候选时只可能剩余空 Cell；它们在主循环结束后追加，
+        // 保持原始 Cell 数量与索引映射。
         if (best_dist >= std::numeric_limits<double>::max() * 0.5) break;
 
         // 选中 best_ci，标记已访问
@@ -855,6 +860,15 @@ void greedyCellOrder(
         cur_x = next_x;
         cur_y = next_y;
         result.push_back(std::move(selected_cell));
+    }
+
+    // 空 Cell 不参与距离决策，但不能在重排时丢失；将它们放在末尾，
+    // 由 Route 构造器跳过，同时保留 cell_order 的原始索引。
+    for (size_t ci = 0; ci < n_cells; ++ci) {
+        if (visited[ci]) continue;
+        visited[ci] = true;
+        new_order.push_back(ci);
+        result.push_back(swaths_by_cells[ci]);
     }
 
     swaths_by_cells = result;

@@ -185,6 +185,25 @@ TEST(PlannerCore, MatchesValidatedNotchedRouteBaseline)
     EXPECT_FALSE(result.path_has_crossings);
 }
 
+TEST(PlannerCore, KeepsShortestConnectionsBetweenOrderedSwaths)
+{
+    yingshi::PlanningRequest request;
+    request.polygon.addRing(makeRing({
+        {0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}, {0.0, 10.0}}));
+    request.decomposition_enabled = false;
+    request.swath_angle_optimization = false;
+    request.path_simplify_enabled = false;
+    request.swath_order_type = "boustrophedon";
+
+    yingshi::PlannerCore planner;
+    const auto result = planner.plan(request);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_GT(result.total_swaths, 2U);
+    // Cell-block 只固定遍历顺序，不能丢掉相邻 Swath 的最短安全连接。
+    EXPECT_GE(result.total_connections, result.total_swaths);
+}
+
 TEST(PlannerCore, KeepsTraversableHoleRouteSafeAfterSimplification)
 {
     yingshi::PlannerCore planner;

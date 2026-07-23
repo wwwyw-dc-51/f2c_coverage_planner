@@ -171,54 +171,24 @@ double holeRepairClearance(
         physicalFootprintClearanceRadius(req.physical_footprint));
 }
 
-// Cell-block 级直连路由：保持贪心排好的 Cell 顺序，只在 Cell 接缝处连接。
+// Cell-block 路由：保持贪心排好的 Cell/Swath 顺序，
+// 但每一条相邻 Swath 都通过 F2C 的 shortest graph 连接。
 f2c::types::Route buildCellBlockRoute(
     const f2c::types::SwathsByCells& swaths_by_cells,
     const f2c::types::Cells& mid_hl)
 {
+    f2c::rp::RoutePlannerBase route_planner;
+    auto shortest_graph = route_planner.createShortestGraph(
+        mid_hl, swaths_by_cells, 1e-4);
+
     f2c::types::Route route;
-    route.addConnection(f2c::types::MultiPoint());
-
-    for (size_t ci = 0; ci < swaths_by_cells.size(); ++ci) {
-        if (swaths_by_cells.at(ci).size() == 0) continue;
-        route.addSwaths(swaths_by_cells.at(ci));
-
-        f2c::types::MultiPoint conn;
-        size_t next = ci + 1;
-        while (next < swaths_by_cells.size() &&
-               swaths_by_cells.at(next).size() == 0) ++next;
-        if (next >= swaths_by_cells.size()) {
-            route.addConnection(conn);
-            continue;
+    for (const auto& cell_swaths : swaths_by_cells) {
+        for (const auto& swath : cell_swaths) {
+            // 输入已经由 greedyCellOrder 排好；这里不再调用任何全局排序。
+            // addSwath(Graph2D) 会为当前顺序中的每一条 Swath 生成
+            // headland/Cell 边界上的最短安全连接。
+            route.addSwath(swath, shortest_graph);
         }
-
-        const auto& last_sw = swaths_by_cells.at(ci).back();
-        const auto& next_sw = swaths_by_cells.at(next).at(0);
-        double lx = last_sw.endPoint().getX();
-        double ly = last_sw.endPoint().getY();
-        double nx = next_sw.startPoint().getX();
-        double ny = next_sw.startPoint().getY();
-
-        conn.addPoint(lx, ly);
-        if (mid_hl.size() > 0) {
-            const auto& hl = mid_hl.getGeometry(0).getExteriorRing();
-            if (hl.size() > 2) {
-                double hlx = 0, hly = 0;
-                for (size_t hi = 0; hi + 1 < hl.size(); ++hi) {
-                    hlx += hl.getGeometry(hi).getX();
-                    hly += hl.getGeometry(hi).getY();
-                }
-                hlx /= (hl.size() - 1);
-                hly /= (hl.size() - 1);
-                double mx = (lx+nx)*0.5, my = (ly+ny)*0.5;
-                double dx = mx-hlx, dy = my-hly;
-                double d = std::hypot(dx, dy);
-                if (d > 0.01)
-                    conn.addPoint(hlx+dx*0.3, hly+dy*0.3);
-            }
-        }
-        conn.addPoint(nx, ny);
-        route.addConnection(conn);
     }
     return route;
 }
@@ -430,6 +400,11 @@ PlanningComponentResult planSingleComponent(
         if (!req.holes.empty()) {
             clipSwathsCrossingHoles(
                 swaths_by_cells, req.holes, req.min_swath_length);
+        }
+
+        if (swaths_by_cells.sizeTotal() == 0) {
+            result.error_message = "No swaths remain after hole clipping";
+            return result;
         }
 
         // ── 5. 孔洞裁剪 ──

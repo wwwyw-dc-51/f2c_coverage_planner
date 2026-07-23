@@ -281,6 +281,27 @@ TEST(CellOrder, UsesPreviousCellExitToChooseNextCellEntryDirection)
         2.0, 1e-9);
 }
 
+TEST(CellOrder, PreservesEmptyCellSlotsAndOriginalOrderMapping)
+{
+    f2c::types::Swaths first_cell;
+    first_cell.push_back(makeSwath(0.0, 0.0, 4.0, 0.0));
+    f2c::types::Swaths empty_cell;
+    f2c::types::Swaths last_cell;
+    last_cell.push_back(makeSwath(10.0, 0.0, 14.0, 0.0));
+    f2c::types::SwathsByCells cells {
+        first_cell, empty_cell, last_cell};
+    std::vector<size_t> order;
+
+    yingshi::greedyCellOrder(cells, order, {});
+
+    ASSERT_EQ(cells.size(), 3U);
+    ASSERT_EQ(order.size(), 3U);
+    EXPECT_EQ(cells.at(2).size(), 0U);
+    EXPECT_EQ(order.at(0), 0U);
+    EXPECT_EQ(order.at(1), 2U);
+    EXPECT_EQ(order.at(2), 1U);
+}
+
 TEST(CellOrder, UsesGreedyEntryDirectionWithHole)
 {
     f2c::types::Swaths first_cell;
