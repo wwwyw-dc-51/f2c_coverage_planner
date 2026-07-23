@@ -414,6 +414,46 @@ TEST(BoundaryFill, KeepsSeamFillWhenCommonCoverageMissesOneEndpoint)
     EXPECT_EQ(swaths_by_cells.sizeTotal(), 3U);
 }
 
+TEST(BoundaryFill, MergesSafeCollinearFragmentsAcrossCells)
+{
+    const auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+
+    f2c::types::Swaths left;
+    left.push_back(makeSwath(0.15, 2.0, 5.0, 2.0, 0.90));
+    f2c::types::Swaths right;
+    right.push_back(makeSwath(5.0, 2.0, 9.85, 2.0, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {left, right};
+
+    EXPECT_EQ(yingshi::mergeCollinearSwathsAcrossCells(
+        swaths_by_cells, full_polygon, 0.90), 1U);
+    ASSERT_EQ(swaths_by_cells.at(0).size(), 1U);
+    EXPECT_EQ(swaths_by_cells.at(1).size(), 0U);
+    EXPECT_NEAR(
+        swaths_by_cells.at(0).at(0).startPoint().getX(), 0.15, 1e-9);
+    EXPECT_NEAR(
+        swaths_by_cells.at(0).at(0).endPoint().getX(), 9.85, 1e-9);
+}
+
+TEST(BoundaryFill, DoesNotMergeFragmentsAcrossAHole)
+{
+    auto full_polygon = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    full_polygon.addRing(makeClosedRing({
+        f2c::types::Point(4.99, 1.0),
+        f2c::types::Point(5.01, 1.0),
+        f2c::types::Point(5.01, 3.0),
+        f2c::types::Point(4.99, 3.0)}));
+
+    f2c::types::Swaths left;
+    left.push_back(makeSwath(0.15, 2.0, 4.99, 2.0, 0.90));
+    f2c::types::Swaths right;
+    right.push_back(makeSwath(5.01, 2.0, 9.85, 2.0, 0.90));
+    f2c::types::SwathsByCells swaths_by_cells {left, right};
+
+    EXPECT_EQ(yingshi::mergeCollinearSwathsAcrossCells(
+        swaths_by_cells, full_polygon, 0.90), 0U);
+    EXPECT_EQ(swaths_by_cells.sizeTotal(), 2U);
+}
+
 TEST(BoundaryFill, UsesCoverageWidthRatherThanRowSpacingForBoundaryOffset)
 {
     const auto full_polygon = makeRectangle(0.0, 0.0, 2.0, 20.0);

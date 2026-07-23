@@ -1334,6 +1334,238 @@ size_t pruneRedundantCellSeamFills(
     return removed_count;
 }
 
+// ========== 跨 Cell 共线 Swath 合并 ==========
+// 仅合并同一自由空间带内的安全连续片段，不跨越孔洞或真实缺口。
+size_t mergeCollinearSwathsAcrossCells(
+    f2c::types::SwathsByCells& swaths_by_cells,
+    const f2c::types::Cell& full_polygon,
+    double coverage_width)
+{
+    if (swaths_by_cells.sizeTotal() == 0 || coverage_width <= 0.0) {
+        return 0;
+    }
+
+    constexpr double kEpsilon = 1e-9;
+    constexpr double kDirectionTolerance = 1e-6;
+    const double line_tolerance = std::max(1e-5, coverage_width * 1e-4);
+    const double gap_tolerance = std::max(1e-5, coverage_width * 0.05);
+    const double sample_step = std::min(0.05, coverage_width * 0.1);
+
+    const auto pointOnSegment = [kEpsilon](
+        double px, double py, double x1, double y1,
+        double x2, double y2) {
+        const double dx = x2 - x1;
+        const double dy = y2 - y1;
+        const double length = std::hypot(dx, dy);
+        if (length < kEpsilon) {
+            return std::hypot(px - x1, py - y1) <= 1e-6;
+        }
+        const double cross =
+            std::abs((px - x1) * dy - (py - y1) * dx);
+        if (cross > 1e-6 * length) return false;
+        const double dot = (px - x1) * dx + (py - y1) * dy;
+        return dot >= -1e-6 && dot <= length * length + 1e-6;
+    };
+
+    const auto pointOnRing = [&](double px, double py,
+                                 const f2c::types::LinearRing& ring) {
+        for (size_t i = 0; i + 1 < ring.size(); ++i) {
+            const auto p1 = ring.getGeometry(i);
+            const auto p2 = ring.getGeometry(i + 1);
+            if (pointOnSegment(
+                    px, py, p1.getX(), p1.getY(), p2.getX(), p2.getY())) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const auto pointInFreeSpace = [&](double px, double py) {
+        const auto& outer = full_polygon.getExteriorRing();
+        if (!pointInPolygon(px, py, outer) && !pointOnRing(px, py, outer)) {
+            return false;
+        }
+        for (size_t i = 0; i + 1 < full_polygon.size(); ++i) {
+            if (pointInPolygon(
+                    px, py, full_polygon.getInteriorRing(i))) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const auto segmentInFreeSpace = [&](double x1, double y1,
+                                        double x2, double y2) {
+        const double length = std::hypot(x2 - x1, y2 - y1);
+        if (length < kEpsilon) return false;
+        const size_t samples = std::max<size_t>(
+            2, static_cast<size_t>(std::ceil(length / sample_step)));
+        for (size_t i = 1; i < samples; ++i) {
+            const double ratio = static_cast<double>(i) /
+                static_cast<double>(samples);
+            if (!pointInFreeSpace(
+                    x1 + (x2 - x1) * ratio,
+                    y1 + (y2 - y1) * ratio)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    struct Endpoint {
+        double x;
+        double y;
+        double projection;
+    };
+
+    size_t removed_count = 0;
+    bool merged = true;
+    while (merged) {
+        merged = false;
+        for (size_t first_group = 0;
+             first_group < swaths_by_cells.size() && !merged;
+             ++first_group) {
+            for (size_t first_index = 0;
+                 first_index < swaths_by_cells.at(first_group).size() &&
+                 !merged;
+                 ++first_index) {
+                const auto first =
+                    swaths_by_cells.at(first_group).at(first_index);
+                const double ax = first.endPoint().getX() -
+                    first.startPoint().getX();
+                const double ay = first.endPoint().getY() -
+                    first.startPoint().getY();
+                const double first_length = std::hypot(ax, ay);
+                if (first_length < kEpsilon) continue;
+                const double dir_x = ax / first_length;
+                const double dir_y = ay / first_length;
+                const double normal_x = -dir_y;
+                const double normal_y = dir_x;
+                const double origin_x = first.startPoint().getX();
+                const double origin_y = first.startPoint().getY();
+
+                for (size_t second_group = first_group + 1;
+                     second_group < swaths_by_cells.size() && !merged;
+                     ++second_group) {
+                    for (size_t second_index = 0;
+                         second_index < swaths_by_cells.at(second_group).size();
+                         ++second_index) {
+                        const auto second =
+                            swaths_by_cells.at(second_group).at(second_index);
+                        if (std::abs(first.getWidth() - second.getWidth()) >
+                            1e-6) {
+                            continue;
+                        }
+
+                        const double bx = second.endPoint().getX() -
+                            second.startPoint().getX();
+                        const double by = second.endPoint().getY() -
+                            second.startPoint().getY();
+                        const double second_length = std::hypot(bx, by);
+                        if (second_length < kEpsilon) continue;
+                        const double second_dir_x = bx / second_length;
+                        const double second_dir_y = by / second_length;
+                        if (std::abs(dir_x * second_dir_x +
+                                     dir_y * second_dir_y) <
+                            1.0 - kDirectionTolerance) {
+                            continue;
+                        }
+
+                        const auto signedDistance = [&](const auto& point) {
+                            return (point.getX() - origin_x) * normal_x +
+                                (point.getY() - origin_y) * normal_y;
+                        };
+                        if (std::abs(signedDistance(second.startPoint())) >
+                                line_tolerance ||
+                            std::abs(signedDistance(second.endPoint())) >
+                                line_tolerance) {
+                            continue;
+                        }
+
+                        const auto projection = [&](const auto& point) {
+                            return (point.getX() - origin_x) * dir_x +
+                                (point.getY() - origin_y) * dir_y;
+                        };
+                        const double first_start_projection =
+                            projection(first.startPoint());
+                        const double first_end_projection =
+                            projection(first.endPoint());
+                        const double second_start_projection =
+                            projection(second.startPoint());
+                        const double second_end_projection =
+                            projection(second.endPoint());
+                        const double first_min = std::min(
+                            first_start_projection, first_end_projection);
+                        const double first_max = std::max(
+                            first_start_projection, first_end_projection);
+                        const double second_min = std::min(
+                            second_start_projection, second_end_projection);
+                        const double second_max = std::max(
+                            second_start_projection, second_end_projection);
+                        const double gap = std::max(
+                            0.0, std::max(first_min, second_min) -
+                            std::min(first_max, second_max));
+                        if (gap > gap_tolerance) continue;
+
+                        const Endpoint endpoints[] = {
+                            {first.startPoint().getX(),
+                             first.startPoint().getY(),
+                             first_start_projection},
+                            {first.endPoint().getX(),
+                             first.endPoint().getY(),
+                             first_end_projection},
+                            {second.startPoint().getX(),
+                             second.startPoint().getY(),
+                             second_start_projection},
+                            {second.endPoint().getX(),
+                             second.endPoint().getY(),
+                             second_end_projection}};
+                        Endpoint low = endpoints[0];
+                        Endpoint high = endpoints[0];
+                        for (const auto& endpoint : endpoints) {
+                            if (endpoint.projection < low.projection) {
+                                low = endpoint;
+                            }
+                            if (endpoint.projection > high.projection) {
+                                high = endpoint;
+                            }
+                        }
+                        if (!segmentInFreeSpace(
+                                low.x, low.y, high.x, high.y)) {
+                            continue;
+                        }
+
+                        f2c::types::LineString merged_line;
+                        merged_line.addPoint(f2c::types::Point(low.x, low.y));
+                        merged_line.addPoint(f2c::types::Point(high.x, high.y));
+                        f2c::types::Swath merged_swath(
+                            merged_line, first.getWidth(), first.getId(),
+                            first.getType());
+                        merged_swath.setCreationDir(first.getCreationDir());
+                        swaths_by_cells.at(first_group).at(first_index) =
+                            merged_swath;
+
+                        f2c::types::Swaths filtered;
+                        const auto& second_swaths =
+                            swaths_by_cells.at(second_group);
+                        for (size_t index = 0; index < second_swaths.size();
+                             ++index) {
+                            if (index != second_index) {
+                                filtered.push_back(second_swaths.at(index));
+                            }
+                        }
+                        swaths_by_cells.at(second_group) = filtered;
+                        ++removed_count;
+                        merged = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return removed_count;
+}
+
 // ========== 边界策略：对 Route 中全部 swath 应用边界缩进/延伸 ==========
 // 从 ROS 节点 planCoveragePath 提取。对每个 swath 端点独立判断
 // 外环/孔洞净空后调整，确保边界策略一致。

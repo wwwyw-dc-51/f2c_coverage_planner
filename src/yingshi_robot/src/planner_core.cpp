@@ -426,6 +426,8 @@ PlanningComponentResult planSingleComponent(
         // ── 4. 去重接缝补线 ──
         pruneRedundantCellSeamFills(
             swaths_by_cells, no_hl, req.polygon, req.coverage_width);
+        mergeCollinearSwathsAcrossCells(
+            swaths_by_cells, req.polygon, req.coverage_width);
 
         if (!req.holes.empty()) {
             clipSwathsCrossingHoles(
