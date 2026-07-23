@@ -366,6 +366,99 @@ bool pointInsidePlanningCell(
     return !pointInAnyHole(point.getX(), point.getY(), holes);
 }
 
+bool pointOnRingBoundary(
+    const f2c::types::Point& point,
+    const f2c::types::LinearRing& ring,
+    double tolerance)
+{
+    for (size_t i = 0; i + 1 < ring.size(); ++i) {
+        const auto& start = ring.getGeometry(i);
+        const auto& end = ring.getGeometry(i + 1);
+        const double dx = end.getX() - start.getX();
+        const double dy = end.getY() - start.getY();
+        const double length_squared = dx * dx + dy * dy;
+        if (length_squared <= 1e-18) continue;
+        const double t = std::clamp(
+            ((point.getX() - start.getX()) * dx +
+             (point.getY() - start.getY()) * dy) / length_squared,
+            0.0, 1.0);
+        const double closest_x = start.getX() + t * dx;
+        const double closest_y = start.getY() + t * dy;
+        if (std::hypot(point.getX() - closest_x,
+                       point.getY() - closest_y) <= tolerance) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pointInsideFreeSpaceForShortcut(
+    const f2c::types::Point& point,
+    const f2c::types::Cell& planning_cell,
+    const std::vector<f2c::types::LinearRing>& hole_rings)
+{
+    constexpr double kBoundaryTolerance = 1e-6;
+    const auto& exterior = planning_cell.getExteriorRing();
+    if (!pointInPolygon(point.getX(), point.getY(), exterior) &&
+        !pointOnRingBoundary(point, exterior, kBoundaryTolerance)) {
+        return false;
+    }
+
+    const auto isOnHoleBoundary = [&](const auto& ring) {
+        return pointOnRingBoundary(point, ring, kBoundaryTolerance);
+    };
+    for (size_t i = 0; i + 1 < planning_cell.size(); ++i) {
+        const auto& hole = planning_cell.getInteriorRing(i);
+        if (pointInPolygon(point.getX(), point.getY(), hole) ||
+            isOnHoleBoundary(hole)) {
+            return false;
+        }
+    }
+    for (const auto& hole : hole_rings) {
+        if (pointInPolygon(point.getX(), point.getY(), hole) ||
+            isOnHoleBoundary(hole)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool segmentInsideFreeSpaceForShortcut(
+    const f2c::types::Point& start,
+    const f2c::types::Point& end,
+    const f2c::types::Cell& planning_cell,
+    const std::vector<f2c::types::LinearRing>& hole_rings)
+{
+    const double length = start.distance(end);
+    if (length <= 1e-9) return false;
+
+    std::vector<f2c::types::LinearRing> all_holes = hole_rings;
+    for (size_t i = 0; i + 1 < planning_cell.size(); ++i) {
+        all_holes.push_back(planning_cell.getInteriorRing(i));
+    }
+    if (segmentCrossesHole(
+            start.getX(), start.getY(), end.getX(), end.getY(),
+            all_holes, 50)) {
+        return false;
+    }
+
+    constexpr double kSampleSpacing = 0.05;
+    const size_t samples = std::max<size_t>(
+        2, static_cast<size_t>(std::ceil(length / kSampleSpacing)));
+    for (size_t i = 0; i <= samples; ++i) {
+        const double t = static_cast<double>(i) /
+            static_cast<double>(samples);
+        const f2c::types::Point sample(
+            start.getX() + t * (end.getX() - start.getX()),
+            start.getY() + t * (end.getY() - start.getY()));
+        if (!pointInsideFreeSpaceForShortcut(
+                sample, planning_cell, all_holes)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::vector<f2c::types::Point> repairOutsidePolyline(
     const std::vector<f2c::types::Point>& points,
     const f2c::types::Cell& planning_cell,
@@ -467,6 +560,55 @@ size_t repairRouteConnectionsOutsideCell(
         ++repaired_connections;
     }
     return repaired_connections;
+}
+
+size_t shortenSafeRouteConnections(
+    f2c::types::Route& route,
+    const f2c::types::Cell& planning_cell,
+    const std::vector<f2c::types::LinearRing>& hole_rings,
+    double max_direct_length,
+    double min_saved_length)
+{
+    if (route.sizeConnections() == 0 ||
+        planning_cell.getExteriorRing().size() < 4 ||
+        !std::isfinite(max_direct_length) ||
+        !std::isfinite(min_saved_length) ||
+        max_direct_length <= 0.0 || min_saved_length < 0.0) {
+        return 0;
+    }
+
+    size_t shortened_connections = 0;
+    for (size_t connection_idx = 0;
+         connection_idx < route.sizeConnections(); ++connection_idx) {
+        const auto& connection = route.getConnection(connection_idx);
+        if (connection.size() < 2) continue;
+
+        double current_length = 0.0;
+        for (size_t point_idx = 1; point_idx < connection.size(); ++point_idx) {
+            current_length += connection.getGeometry(point_idx - 1).distance(
+                connection.getGeometry(point_idx));
+        }
+
+        const auto& start = connection.getGeometry(0);
+        const auto& end = connection.getGeometry(connection.size() - 1);
+        const double direct_length = start.distance(end);
+        if (direct_length <= 1e-9 ||
+            direct_length > max_direct_length ||
+            current_length - direct_length < min_saved_length) {
+            continue;
+        }
+        if (!segmentInsideFreeSpaceForShortcut(
+                start, end, planning_cell, hole_rings)) {
+            continue;
+        }
+
+        f2c::types::MultiPoint direct_connection;
+        direct_connection.addPoint(start);
+        direct_connection.addPoint(end);
+        route.setConnection(connection_idx, direct_connection);
+        ++shortened_connections;
+    }
+    return shortened_connections;
 }
 
 size_t synchronizeRouteConnectionEndpoints(

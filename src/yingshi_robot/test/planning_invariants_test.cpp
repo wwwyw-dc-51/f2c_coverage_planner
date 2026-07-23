@@ -758,6 +758,92 @@ TEST(RouteInvariant, PreservesSingleDistantDetourWaypoint)
     EXPECT_DOUBLE_EQ(synchronized.getGeometry(1).getY(), 1.0);
 }
 
+TEST(RouteInvariant, ShortensSafeShortConnectionToDirectSegment)
+{
+    const auto planning_cell = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    f2c::types::Route route;
+    f2c::types::Swaths first;
+    first.push_back(makeSwath(2.0, 2.0, 3.0, 2.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first);
+
+    f2c::types::MultiPoint detour;
+    detour.addPoint(f2c::types::Point(3.0, 2.0));
+    detour.addPoint(f2c::types::Point(3.0, 2.2));
+    detour.addPoint(f2c::types::Point(3.2, 2.2));
+    detour.addPoint(f2c::types::Point(3.2, 2.0));
+    f2c::types::Swaths second;
+    second.push_back(makeSwath(3.2, 2.0, 4.2, 2.0));
+    route.addConnectedSwaths(detour, second);
+
+    EXPECT_EQ(yingshi::shortenSafeRouteConnections(
+        route, planning_cell, {}, 2.0, 0.05), 1U);
+    const auto& shortened = route.getConnection(1);
+    ASSERT_EQ(shortened.size(), 2U);
+    EXPECT_DOUBLE_EQ(shortened.getGeometry(0).getX(), 3.0);
+    EXPECT_DOUBLE_EQ(shortened.getGeometry(0).getY(), 2.0);
+    EXPECT_DOUBLE_EQ(shortened.getGeometry(1).getX(), 3.2);
+    EXPECT_DOUBLE_EQ(shortened.getGeometry(1).getY(), 2.0);
+}
+
+TEST(RouteInvariant, KeepsShortConnectionWhenDirectSegmentCrossesHole)
+{
+    auto planning_cell = makeRectangle(0.0, 0.0, 10.0, 10.0);
+    const auto hole = yingshi::makeClosedRing({
+        f2c::types::Point(3.0, 1.5),
+        f2c::types::Point(3.5, 1.5),
+        f2c::types::Point(3.5, 2.5),
+        f2c::types::Point(3.0, 2.5)});
+    planning_cell.addRing(hole);
+
+    f2c::types::Route route;
+    f2c::types::Swaths first;
+    first.push_back(makeSwath(2.0, 2.0, 2.5, 2.0));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first);
+
+    f2c::types::MultiPoint detour;
+    detour.addPoint(f2c::types::Point(2.5, 2.0));
+    detour.addPoint(f2c::types::Point(2.5, 1.0));
+    detour.addPoint(f2c::types::Point(4.0, 1.0));
+    detour.addPoint(f2c::types::Point(4.0, 2.0));
+    f2c::types::Swaths second;
+    second.push_back(makeSwath(4.0, 2.0, 5.0, 2.0));
+    route.addConnectedSwaths(detour, second);
+
+    EXPECT_EQ(yingshi::shortenSafeRouteConnections(
+        route, planning_cell, {hole}, 2.0, 0.05), 0U);
+    EXPECT_EQ(route.getConnection(1).size(), 4U);
+}
+
+TEST(RouteInvariant, KeepsShortConnectionWhenDirectSegmentLeavesConcaveCell)
+{
+    const auto planning_cell = f2c::types::Cell(yingshi::makeClosedRing({
+        f2c::types::Point(0.0, 0.0),
+        f2c::types::Point(4.0, 0.0),
+        f2c::types::Point(4.0, 4.0),
+        f2c::types::Point(3.0, 4.0),
+        f2c::types::Point(3.0, 1.0),
+        f2c::types::Point(1.0, 1.0),
+        f2c::types::Point(1.0, 4.0),
+        f2c::types::Point(0.0, 4.0)}));
+    f2c::types::Route route;
+    f2c::types::Swaths first;
+    first.push_back(makeSwath(0.5, 3.0, 0.5, 3.5));
+    route.addConnectedSwaths(f2c::types::MultiPoint(), first);
+
+    f2c::types::MultiPoint detour;
+    detour.addPoint(f2c::types::Point(0.5, 3.0));
+    detour.addPoint(f2c::types::Point(0.5, 0.5));
+    detour.addPoint(f2c::types::Point(3.5, 0.5));
+    detour.addPoint(f2c::types::Point(3.5, 3.0));
+    f2c::types::Swaths second;
+    second.push_back(makeSwath(3.5, 3.0, 3.5, 3.5));
+    route.addConnectedSwaths(detour, second);
+
+    EXPECT_EQ(yingshi::shortenSafeRouteConnections(
+        route, planning_cell, {}, 4.0, 0.05), 0U);
+    EXPECT_EQ(route.getConnection(1).size(), 4U);
+}
+
 TEST(DirectPath, PreservesEveryRouteConnectionWaypoint)
 {
     f2c::types::Route route;

@@ -501,6 +501,14 @@ PlanningComponentResult planSingleComponent(
         }
         repairRouteConnectionsOutsideCell(route, req.polygon);
 
+        // 仅在 C-space 的 direct + 非 none 基线中尝试短连接直连；
+        // TSP 对照和未约束物理 footprint 管线保持原样。
+        if (cspace_constrained && req.turn_planner_type == "direct" &&
+            req.swath_order_type != "none") {
+            shortenSafeRouteConnections(
+                route, req.polygon, req.holes, 2.0, 0.05);
+        }
+
         if (req.physical_collision_check_enabled && !cspace_constrained) {
             const auto endpoint_repairs =
                 repairRouteSwathEndpointsForCollision(
