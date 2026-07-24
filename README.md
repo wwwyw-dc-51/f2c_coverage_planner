@@ -1,8 +1,10 @@
 # F2C 全覆盖路径规划系统
 
-> **版本**: v9.11 (2026-07-20) | **编译**: 0 error 0 warning | **测试**: 74/74 ✅
+> **版本**: v10.0 十全十美 (2026-07-24) | **编译**: 0 error 0 warning | **测试**: 21/21 GATE PASS ✅
 > 
-> *v9.11 = v9.7 + C-space退役 + 空隙分类器 + Phase 4A + filter/merge顺序修复 + S8重命名 + per-cell离群veto + 穿洞硬约束修复*
+> *v10.0 = v9.12 + 覆盖率指标统一 + PATH_CHEAPEST_ARC 确定性 TSP + 微型去冗余 + 审计工具 + N3 重复测试 + WSL2 环境支持*
+>
+> **⚡ WSL2 (2026-07-24)**：Fields2Cover 源码编译，21 场景全量批测通过，**得分全面超越 VM 基线**（S7 +8.6, N12 +7.5）。见 [SETUP_GUIDE.md](SETUP_GUIDE.md)。
 
 基于 Fields2Cover + ROS2 Humble 的扫地机器人全覆盖路径规划系统。  
 GitHub: [wwwyw-dc-51/f2c_coverage_planner](https://github.com/wwwyw-dc-51/f2c_coverage_planner)

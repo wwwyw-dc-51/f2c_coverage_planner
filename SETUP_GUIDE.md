@@ -1,7 +1,8 @@
 # F2C 全覆盖路径规划 — 配置与使用指南
 
-> **版本**: v9.11 稳定版 (2026-07-20)
-> **环境**: Windows 11 宿主机 + Ubuntu 22.04 VMware 虚拟机 (ROS2 Humble)
+> **版本**: v10.0 十全十美 (2026-07-24)
+> **环境**: Windows 11 宿主机 + Ubuntu 22.04 (VMware 虚拟机 / WSL2)
+> **测试**: 21/21 GATE PASS (WSL2 批测得分全面超越 VM 基线)
 
 ---
 
@@ -24,6 +25,7 @@
 |------|------|------|
 | Git Bash | 运行脚本、SSH/SCP | https://git-scm.com/download/win |
 | Python 3 (3.10+) | 渲染可视化图 | https://www.python.org/downloads/ |
+| WSL2 (可选) | 替代 VM 的本地 Linux 开发环境 | `wsl --install Ubuntu-22.04` |
 
 安装完 Python 后，在 Git Bash 中装依赖：
 ```bash
@@ -37,6 +39,23 @@ pip install matplotlib numpy pyyaml
 | VMware 网络 | NAT 模式 |
 
 > **注意**: Fields2Cover 和 OR-Tools 已预编译打包在项目中，VM 端无需单独安装。
+
+### WSL2 (可选，推荐)
+| 软件 | 位置 |
+|------|------|
+| ROS2 Humble | `/opt/ros/humble/` (清华镜像源安装) |
+| Fields2Cover | 从源码编译 (`src/Fields2Cover/`) |
+| GUI | WSLg 自动支持 (RViz2 可直接运行) |
+
+WSL2 相比 VM 的优势：GPU 加速、启动快、文件互通、无需 SSH 同步。
+详细搭建步骤见 [WSL2 环境搭建记录](../.claude/projects/C--WINDOWS-system32/memory/wsl2-f2c-setup.md)。
+
+**WSL2 快速启动：**
+```bash
+# 在 WSL Ubuntu 终端中
+source scripts/wsl_env.sh     # 一键环境配置
+bash scripts/batch_test_v2.sh # 运行全量批测
+```
 
 ---
 
